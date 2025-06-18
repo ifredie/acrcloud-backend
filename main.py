@@ -1,30 +1,32 @@
 from fastapi import FastAPI
-from pydantic import BaseModel, Field
-from typing import List
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from typing import List, Optional
+import pandas as pd
+import uuid
 import os
 
 app = FastAPI()
 
-# Modelos
-class StreamConfig(BaseModel):
+class Horario(BaseModel):
+    hora_exacta: str
+
+class Stream(BaseModel):
     stream_id: str
     nombre: str
     url_stream: str
 
-class Horario(BaseModel):
-    hora_exacta: str  # Ejemplo: "08:15"
-
 class Material(BaseModel):
     nombre: str
     acr_id: str
-    fechas_activas: List[str]  # Ej: ["2025-06-17", "2025-06-18"]
+    fechas_activas: List[str]
     horarios: List[Horario]
     streams: List[str]
     categoria: str
-    conflicto_con: List[str] = Field(default_factory=list)
-    back_to_back: List[str] = Field(default_factory=list)
+    conflicto_con: Optional[List[str]] = []
+    back_to_back: Optional[List[str]] = []
 
-class Proyecto(BaseModel):
+class ProyectoRequest(BaseModel):
     proyecto_id: str
     nombre: str
     cliente: str
@@ -36,20 +38,42 @@ class Proyecto(BaseModel):
     tipo_reportes: List[str]
     destinatarios: List[str]
     materiales: List[Material]
-    streams_catalogo: List[StreamConfig]
+    streams_catalogo: List[Stream]
 
-@app.get("/ping")
-def ping():
-    return {"message": "pong"}
+@app.get("/")
+def read_root():
+    return {"message": "Backend ACRCloud funcionando correctamente"}
 
-@app.post("/subir-proyecto")
-async def subir_proyecto(data: Proyecto):
-    return {
-        "status": "ok",
-        "mensaje": f"Proyecto {data.nombre} recibido con {len(data.materiales)} materiales."
-    }
+@app.post("/generar-reporte")
+async def generar_reporte(request: ProyectoRequest):
+    detecciones = []
+    for material in request.materiales:
+        for fecha in material.fechas_activas:
+            for horario in material.horarios:
+                for stream_id in material.streams:
+                    stream_info = next((s for s in request.streams_catalogo if s.stream_id == stream_id), None)
+                    if stream_info:
+                        detecciones.append({
+                            "Fecha": fecha,
+                            "Hora esperada": horario.hora_exacta,
+                            "Hora detectada": horario.hora_exacta,
+                            "Material": material.nombre,
+                            "ACR_ID": material.acr_id,
+                            "Stream": stream_info.nombre,
+                            "URL Stream": stream_info.url_stream
+                        })
 
-if __name__ == "__main__":
+    df = pd.DataFrame(detecciones)
+    filename = f"/mnt/data/reporte_{request.proyecto_id}_{uuid.uuid4().hex[:6]}.xlsx"
+    df.to_excel(filename, index=False)
+
+    return FileResponse(
+        path=filename,
+        filename=os.path.basename(filename),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+if __name__ != "main":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=port)
