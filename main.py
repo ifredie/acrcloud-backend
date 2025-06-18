@@ -1,8 +1,12 @@
+
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import os
 import pandas as pd
-from datetime import datetime
+from io import BytesIO
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 
@@ -11,59 +15,64 @@ def ping():
     return {"message": "pong"}
 
 @app.post("/subir-proyecto")
+async def subir_proyecto(request: Request):
+    data = await request.json()
+    nombre_proyecto = data.get("nombre", "sin_nombre")
+    num_materiales = len(data.get("materiales", []))
+    return {
+        "status": "ok",
+        "mensaje": f"Proyecto {nombre_proyecto} recibido con {num_materiales} materiales."
+    }
+
+@app.post("/generar-reporte")
 async def generar_reporte(request: Request):
     data = await request.json()
 
-    proyecto = data.get("nombre", "Proyecto sin nombre")
-    cliente = data.get("cliente", "Sin cliente")
-    agencia = data.get("agencia", "Sin agencia")
-    marca = data.get("marca", "Sin marca")
-    producto = data.get("producto", "Sin producto")
+    proyecto_info = {
+        "ID Proyecto": data.get("proyecto_id"),
+        "Nombre": data.get("nombre"),
+        "Cliente": data.get("cliente"),
+        "Agencia": data.get("agencia"),
+        "Marca": data.get("marca"),
+        "Producto": data.get("producto"),
+        "Tipo Cliente": data.get("tipo_cliente"),
+        "Tolerancia (min)": data.get("tolerancia_minutos"),
+        "Reportes": ", ".join(data.get("tipo_reportes", [])),
+        "Destinatarios": ", ".join(data.get("destinatarios", [])),
+        "Cantidad de materiales": len(data.get("materiales", []))
+    }
 
-    materiales = data.get("materiales", [])
-    rows = []
-
-    for material in materiales:
-        nombre_material = material.get("nombre", "Material sin nombre")
-        acr_id = material.get("acr_id", "")
-        fechas = material.get("fechas_activas", [])
-        horarios = material.get("horarios", [])
-        streams = material.get("streams", [])
-        categoria = material.get("categoria", "")
-        conflicto_con = ", ".join(material.get("conflicto_con", []))
-        back_to_back = ", ".join(material.get("back_to_back", []))
-
-        for fecha in fechas:
-            for horario in horarios:
-                hora = horario.get("hora_exacta", "")
-                for stream in streams:
-                    rows.append({
-                        "Proyecto": proyecto,
-                        "Cliente": cliente,
-                        "Agencia": agencia,
-                        "Marca": marca,
-                        "Producto": producto,
-                        "Material": nombre_material,
+    materiales_data = []
+    for m in data.get("materiales", []):
+        for stream_id in m.get("streams", []):
+            for fecha in m.get("fechas_activas", []):
+                for horario in m.get("horarios", []):
+                    materiales_data.append({
+                        "Material": m["nombre"],
+                        "acr_id": m["acr_id"],
                         "Fecha": fecha,
-                        "Hora exacta": hora,
-                        "Stream ID": stream,
-                        "ACR ID": acr_id,
-                        "Categoría": categoria,
-                        "Conflicto con": conflicto_con,
-                        "Back to Back con": back_to_back
+                        "Hora exacta": horario["hora_exacta"],
+                        "Stream ID": stream_id,
+                        "Categoría": m.get("categoria"),
+                        "Conflictos": ", ".join(m.get("conflicto_con", [])),
+                        "Back to back": ", ".join(m.get("back_to_back", []))
                     })
 
-    df = pd.DataFrame(rows)
-    archivo = "reporte.xlsx"
-    df.to_excel(archivo, index=False)
+    streams_data = data.get("streams_catalogo", [])
 
-    return FileResponse(
-        path=archivo,
-        filename=archivo,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    df_proyecto = pd.DataFrame([proyecto_info])
+    df_materiales = pd.DataFrame(materiales_data)
+    df_streams = pd.DataFrame(streams_data)
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df_proyecto.to_excel(writer, sheet_name="Proyecto", index=False)
+        df_materiales.to_excel(writer, sheet_name="Materiales", index=False)
+        df_streams.to_excel(writer, sheet_name="Streams", index=False)
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=reporte.xlsx"}
     )
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
