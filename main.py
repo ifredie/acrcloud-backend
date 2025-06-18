@@ -1,79 +1,69 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from typing import List, Optional
-import pandas as pd
-import uuid
 import os
+import pandas as pd
+from datetime import datetime
 
 app = FastAPI()
 
-class Horario(BaseModel):
-    hora_exacta: str
+@app.get("/ping")
+def ping():
+    return {"message": "pong"}
 
-class Stream(BaseModel):
-    stream_id: str
-    nombre: str
-    url_stream: str
+@app.post("/subir-proyecto")
+async def generar_reporte(request: Request):
+    data = await request.json()
 
-class Material(BaseModel):
-    nombre: str
-    acr_id: str
-    fechas_activas: List[str]
-    horarios: List[Horario]
-    streams: List[str]
-    categoria: str
-    conflicto_con: Optional[List[str]] = []
-    back_to_back: Optional[List[str]] = []
+    proyecto = data.get("nombre", "Proyecto sin nombre")
+    cliente = data.get("cliente", "Sin cliente")
+    agencia = data.get("agencia", "Sin agencia")
+    marca = data.get("marca", "Sin marca")
+    producto = data.get("producto", "Sin producto")
 
-class ProyectoRequest(BaseModel):
-    proyecto_id: str
-    nombre: str
-    cliente: str
-    agencia: str
-    marca: str
-    producto: str
-    tipo_cliente: str
-    tolerancia_minutos: int
-    tipo_reportes: List[str]
-    destinatarios: List[str]
-    materiales: List[Material]
-    streams_catalogo: List[Stream]
+    materiales = data.get("materiales", [])
+    rows = []
 
-@app.get("/")
-def read_root():
-    return {"message": "Backend ACRCloud funcionando correctamente"}
+    for material in materiales:
+        nombre_material = material.get("nombre", "Material sin nombre")
+        acr_id = material.get("acr_id", "")
+        fechas = material.get("fechas_activas", [])
+        horarios = material.get("horarios", [])
+        streams = material.get("streams", [])
+        categoria = material.get("categoria", "")
+        conflicto_con = ", ".join(material.get("conflicto_con", []))
+        back_to_back = ", ".join(material.get("back_to_back", []))
 
-@app.post("/generar-reporte")
-async def generar_reporte(request: ProyectoRequest):
-    detecciones = []
-    for material in request.materiales:
-        for fecha in material.fechas_activas:
-            for horario in material.horarios:
-                for stream_id in material.streams:
-                    stream_info = next((s for s in request.streams_catalogo if s.stream_id == stream_id), None)
-                    if stream_info:
-                        detecciones.append({
-                            "Fecha": fecha,
-                            "Hora esperada": horario.hora_exacta,
-                            "Hora detectada": horario.hora_exacta,
-                            "Material": material.nombre,
-                            "ACR_ID": material.acr_id,
-                            "Stream": stream_info.nombre,
-                            "URL Stream": stream_info.url_stream
-                        })
+        for fecha in fechas:
+            for horario in horarios:
+                hora = horario.get("hora_exacta", "")
+                for stream in streams:
+                    rows.append({
+                        "Proyecto": proyecto,
+                        "Cliente": cliente,
+                        "Agencia": agencia,
+                        "Marca": marca,
+                        "Producto": producto,
+                        "Material": nombre_material,
+                        "Fecha": fecha,
+                        "Hora exacta": hora,
+                        "Stream ID": stream,
+                        "ACR ID": acr_id,
+                        "Categoría": categoria,
+                        "Conflicto con": conflicto_con,
+                        "Back to Back con": back_to_back
+                    })
 
-    df = pd.DataFrame(detecciones)
-    filename = f"/mnt/data/reporte_{request.proyecto_id}_{uuid.uuid4().hex[:6]}.xlsx"
-    df.to_excel(filename, index=False)
+    df = pd.DataFrame(rows)
+    archivo = "reporte.xlsx"
+    df.to_excel(archivo, index=False)
 
     return FileResponse(
-        path=filename,
-        filename=os.path.basename(filename),
+        path=archivo,
+        filename=archivo,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-if __name__ != "main":
+if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
