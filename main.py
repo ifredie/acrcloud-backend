@@ -1,23 +1,55 @@
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from typing import List
 import os
 
 app = FastAPI()
+
+# Modelos
+class StreamConfig(BaseModel):
+    stream_id: str
+    nombre: str
+    url_stream: str
+
+class Horario(BaseModel):
+    hora_exacta: str  # Ejemplo: "08:15"
+
+class Material(BaseModel):
+    nombre: str
+    acr_id: str
+    fechas_activas: List[str]  # Ej: ["2025-06-17", "2025-06-18"]
+    horarios: List[Horario]
+    streams: List[str]
+    categoria: str
+    conflicto_con: List[str] = Field(default_factory=list)
+    back_to_back: List[str] = Field(default_factory=list)
+
+class Proyecto(BaseModel):
+    proyecto_id: str
+    nombre: str
+    cliente: str
+    agencia: str
+    marca: str
+    producto: str
+    tipo_cliente: str
+    tolerancia_minutos: int
+    tipo_reportes: List[str]
+    destinatarios: List[str]
+    materiales: List[Material]
+    streams_catalogo: List[StreamConfig]
 
 @app.get("/ping")
 def ping():
     return {"message": "pong"}
 
-@app.get("/test-bubble-key")
-def test_bubble_key():
-    key = os.getenv("BUBBLE_API_KEY")
-    if not key:
-        return JSONResponse(status_code=500, content={"error": "BUBBLE_API_KEY no está configurada"})
-    return {"message": "BUBBLE_API_KEY está configurada"}
+@app.post("/subir-proyecto")
+async def subir_proyecto(data: Proyecto):
+    return {
+        "status": "ok",
+        "mensaje": f"Proyecto {data.nombre} recibido con {len(data.materiales)} materiales."
+    }
 
-@app.get("/test-acr-token")
-def test_acr_token():
-    token = os.getenv("ACR_TOKEN")
-    if not token:
-        return JSONResponse(status_code=500, content={"error": "ACR_TOKEN no está configurado"})
-    return {"message": "ACR_TOKEN está configurado"}
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
