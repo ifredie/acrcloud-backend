@@ -1,78 +1,70 @@
-
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
 import os
+import json
+import datetime
+import requests
 import pandas as pd
-from io import BytesIO
-from dotenv import load_dotenv
-
-load_dotenv()
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import FileResponse
 
 app = FastAPI()
 
-@app.get("/ping")
-def ping():
-    return {"message": "pong"}
+# Configuración
+PID = os.getenv("ACRCLOUD_PROJECT_ID", "TU_PROJECT_ID")
+BEARER_TOKEN = os.getenv("ACRCLOUD_BEARER_TOKEN", "TU_BEARER_TOKEN")
 
-@app.post("/subir-proyecto")
-async def subir_proyecto(request: Request):
-    data = await request.json()
-    nombre_proyecto = data.get("nombre", "sin_nombre")
-    num_materiales = len(data.get("materiales", []))
-    return {
-        "status": "ok",
-        "mensaje": f"Proyecto {nombre_proyecto} recibido con {num_materiales} materiales."
-    }
 
-@app.post("/generar-reporte")
-async def generar_reporte(request: Request):
-    data = await request.json()
+@app.post("/subir-pauta")
+async def subir_pauta(pauta: UploadFile = File(...)):
+    contenido = await pauta.read()
+    with open("pauta.json", "wb") as f:
+        f.write(contenido)
+    return {"mensaje": "Pauta guardada correctamente"}
 
-    proyecto_info = {
-        "ID Proyecto": data.get("proyecto_id"),
-        "Nombre": data.get("nombre"),
-        "Cliente": data.get("cliente"),
-        "Agencia": data.get("agencia"),
-        "Marca": data.get("marca"),
-        "Producto": data.get("producto"),
-        "Tipo Cliente": data.get("tipo_cliente"),
-        "Tolerancia (min)": data.get("tolerancia_minutos"),
-        "Reportes": ", ".join(data.get("tipo_reportes", [])),
-        "Destinatarios": ", ".join(data.get("destinatarios", [])),
-        "Cantidad de materiales": len(data.get("materiales", []))
-    }
 
-    materiales_data = []
-    for m in data.get("materiales", []):
-        for stream_id in m.get("streams", []):
-            for fecha in m.get("fechas_activas", []):
-                for horario in m.get("horarios", []):
-                    materiales_data.append({
-                        "Material": m["nombre"],
-                        "acr_id": m["acr_id"],
-                        "Fecha": fecha,
-                        "Hora exacta": horario["hora_exacta"],
-                        "Stream ID": stream_id,
-                        "Categoría": m.get("categoria"),
-                        "Conflictos": ", ".join(m.get("conflicto_con", [])),
-                        "Back to back": ", ".join(m.get("back_to_back", []))
-                    })
+def consultar_acrcloud_stream(stream_id, fecha_iso):
+    url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{PID}/streams/{stream_id}/results?date={fecha_iso}"
+    headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
+    response = requests.get(url, headers=headers)
+    return response.json()
 
-    streams_data = data.get("streams_catalogo", [])
 
-    df_proyecto = pd.DataFrame([proyecto_info])
-    df_materiales = pd.DataFrame(materiales_data)
-    df_streams = pd.DataFrame(streams_data)
+@app.get("/generar-reporte")
+def generar_reporte():
+    if not os.path.exists("pauta.json"):
+        return {"error": "No se ha subido una pauta aún"}
 
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df_proyecto.to_excel(writer, sheet_name="Proyecto", index=False)
-        df_materiales.to_excel(writer, sheet_name="Materiales", index=False)
-        df_streams.to_excel(writer, sheet_name="Streams", index=False)
-    output.seek(0)
+    with open("pauta.json", "r") as f:
+        pauta = json.load(f)
 
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=reporte.xlsx"}
+    hoy = datetime.date.today().isoformat()
+    resultados = []
+
+    for material in pauta["materiales"]:
+        acr_id = material["acr_id"]
+        fechas_activas = material["fechas_activas"]
+        horarios = [h["hora_exacta"] for h in material["horarios"]]
+        streams = material["streams"]
+
+        for stream in streams:
+            detecciones = consultar_acrcloud_stream(stream, hoy)
+            hits = detecciones.get("hits", [])
+            for hit in hits:
+                resultado = {
+                    "material": material["nombre"],
+                    "acr_id": acr_id,
+                    "stream_id": stream,
+                    "timestamp": hit.get("timestamp_utc", ""),
+                    "score": hit.get("score", ""),
+                    "track_id": hit.get("track_id", ""),
+                }
+                resultados.append(resultado)
+
+    df = pd.DataFrame(resultados)
+    archivo = "reporte.xlsx"
+    df.to_excel(archivo, index=False)
+
+    return FileResponse(
+        path=archivo,
+        filename=archivo,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
