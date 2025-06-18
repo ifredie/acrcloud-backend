@@ -33,3 +33,8 @@ class Proyecto(BaseModel):
 @app.post("/crear-proyecto")
 def crear_proyecto(proyecto: Proyecto):
     return {"mensaje": "Proyecto recibido", "proyecto": proyecto}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
