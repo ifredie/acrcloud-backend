@@ -5,3 +5,5 @@ python-dotenv
 requests
 pandas
 openpyxl
+XlsxWriter
+python-multipart
