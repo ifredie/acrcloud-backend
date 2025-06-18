@@ -30,6 +30,10 @@ class Proyecto(BaseModel):
     materiales: List[Material]
     reportes: List[str]
 
+@app.get("/ping")
+def ping():
+    return {"message": "pong"}
+
 @app.post("/crear-proyecto")
 def crear_proyecto(proyecto: Proyecto):
     return {"mensaje": "Proyecto recibido", "proyecto": proyecto}
