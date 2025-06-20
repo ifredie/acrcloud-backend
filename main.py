@@ -1,97 +1,90 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, EmailStr, constr
-from typing import List, Literal, Optional
-import pandas as pd
-import io
-import requests
 import os
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, EmailStr, validator
+from typing import List, Optional
+from datetime import datetime
+import pandas as pd
 
 app = FastAPI()
 
-# --- Modelos estrictos ---
+
+# Modelos de validación
 class Horario(BaseModel):
-    hora_exacta: constr(pattern=r"^\d{2}:\d{2}$")
+    hora_exacta: str
+
 
 class Material(BaseModel):
     nombre: str
     acr_id: str
-    fechas_activas: List[constr(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    fechas_activas: List[str]
     horarios: List[Horario]
     streams: List[str]
-    categoria: Optional[str]
-    conflicto_con: Optional[List[str]]
-    back_to_back: Optional[List[str]]
+    categoria: str
+    conflicto_con: Optional[List[str]] = []
+    back_to_back: Optional[List[str]] = []
+
 
 class Stream(BaseModel):
     stream_id: str
     nombre: str
     url_stream: str
 
+
 class Proyecto(BaseModel):
     proyecto_id: str
     nombre: str
     cliente: str
-    agencia: Optional[str]
-    marca: Optional[str]
-    producto: Optional[str]
-    tipo_cliente: Literal["cliente_directo", "agencia"]
+    agencia: Optional[str] = ""
+    marca: str
+    producto: str
+    tipo_cliente: str
     tolerancia_minutos: int
-    tipo_reportes: List[Literal["diario", "total"]]
+    tipo_reportes: List[str]
     destinatarios: List[EmailStr]
     materiales: List[Material]
     streams_catalogo: List[Stream]
 
-# --- Utilidad para consultar ACRCloud ---
-def obtener_resultados_acrcloud(acr_id: str, bearer_token: str):
-    headers = {
-        "Authorization": f"Bearer {bearer_token}"
-    }
-    url = f"https://api.acrcloud.com/v1/analytics/{acr_id}/results"
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise HTTPException(status_code=502, detail="Error al consultar ACRCloud")
+    @validator("tipo_reportes", each_item=True)
+    def validate_tipo_reportes(cls, v):
+        permitidos = {"diario", "total"}
+        if v not in permitidos:
+            raise ValueError(f"Tipo de reporte inválido: {v}")
+        return v
 
-# --- Endpoint principal ---
+
 @app.post("/generar-reporte")
-async def generar_reporte(data: Proyecto, request: Request):
-    token = os.getenv("ACR_BEARER_TOKEN")
-    if not token:
-        raise HTTPException(status_code=500, detail="Token ACRCloud no configurado")
+async def generar_reporte(proyecto: Proyecto):
+    try:
+        # Ruta de archivo temporal
+        file_name = "reporte_simulado.xlsx"
 
-    report_data = []
+        # Simulación de datos
+        datos = []
+        for mat in proyecto.materiales:
+            for fecha in mat.fechas_activas:
+                for horario in mat.horarios:
+                    datos.append({
+                        "Proyecto": proyecto.nombre,
+                        "Material": mat.nombre,
+                        "Fecha": fecha,
+                        "Hora exacta": horario.hora_exacta,
+                        "Stream ID": ", ".join(mat.streams),
+                        "Categoría": mat.categoria,
+                        "Conflictos": ", ".join(mat.conflicto_con),
+                        "Back to Back": ", ".join(mat.back_to_back),
+                    })
 
-    for material in data.materiales:
-        try:
-            resultados = obtener_resultados_acrcloud(material.acr_id, token)
-        except HTTPException as e:
-            raise e
+        df = pd.DataFrame(datos)
+        with pd.ExcelWriter(file_name, engine="xlsxwriter") as writer:
+            df.to_excel(writer, sheet_name="Reporte", index=False)
 
-        for resultado in resultados.get("data", []):
-            fecha = resultado.get("play_date", "")
-            hora_detectada = resultado.get("play_time", "")
-            stream_id = resultado.get("stream_id", "")
+        return FileResponse(file_name, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=file_name)
 
-            report_data.append({
-                "Proyecto": data.nombre,
-                "Cliente": data.cliente,
-                "Material": material.nombre,
-                "Fecha Detectada": fecha,
-                "Hora Detectada": hora_detectada,
-                "Stream ID": stream_id,
-                "Categoría": material.categoria or "",
-            })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    df = pd.DataFrame(report_data)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="Reporte")
-    output.seek(0)
 
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=reporte_acrcloud.xlsx"}
-    )
+@app.get("/ping")
+async def ping():
+    return {"message": "pong"}

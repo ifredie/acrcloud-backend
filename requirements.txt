@@ -7,4 +7,4 @@ pandas
 openpyxl
 XlsxWriter
 python-multipart
-email-validator
+pydantic[email]
