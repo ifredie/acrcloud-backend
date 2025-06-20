@@ -1,70 +1,43 @@
-import os
-import json
-import datetime
-import requests
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
+from io import BytesIO
 
 app = FastAPI()
 
-# Configuración
-PID = os.getenv("ACRCLOUD_PROJECT_ID", "TU_PROJECT_ID")
-BEARER_TOKEN = os.getenv("ACRCLOUD_BEARER_TOKEN", "TU_BEARER_TOKEN")
+@app.post("/generar-reporte")
+async def generar_reporte(request: Request):
+    body = await request.json()
+    materiales = body.get("materiales", [])
+    streams_catalogo = {s["stream_id"]: s["nombre"] for s in body.get("streams_catalogo", [])}
 
+    rows = []
+    for material in materiales:
+        for fecha in material.get("fechas_activas", []):
+            for horario in material.get("horarios", []):
+                for stream_id in material.get("streams", []):
+                    rows.append({
+                        "Proyecto": body.get("nombre"),
+                        "Cliente": body.get("cliente"),
+                        "Agencia": body.get("agencia"),
+                        "Marca": body.get("marca"),
+                        "Producto": body.get("producto"),
+                        "Material": material.get("nombre"),
+                        "Fecha": fecha,
+                        "Hora esperada": horario.get("hora_exacta"),
+                        "Emisora": streams_catalogo.get(stream_id, stream_id),
+                        "Categoría": material.get("categoria"),
+                        "Conflictos": ", ".join(material.get("conflicto_con", [])),
+                        "Back-to-back": ", ".join(material.get("back_to_back", []))
+                    })
 
-@app.post("/subir-pauta")
-async def subir_pauta(pauta: UploadFile = File(...)):
-    contenido = await pauta.read()
-    with open("pauta.json", "wb") as f:
-        f.write(contenido)
-    return {"mensaje": "Pauta guardada correctamente"}
+    df = pd.DataFrame(rows)
 
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Reporte")
 
-def consultar_acrcloud_stream(stream_id, fecha_iso):
-    url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{PID}/streams/{stream_id}/results?date={fecha_iso}"
-    headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
-    response = requests.get(url, headers=headers)
-    return response.json()
-
-
-@app.get("/generar-reporte")
-def generar_reporte():
-    if not os.path.exists("pauta.json"):
-        return {"error": "No se ha subido una pauta aún"}
-
-    with open("pauta.json", "r") as f:
-        pauta = json.load(f)
-
-    hoy = datetime.date.today().isoformat()
-    resultados = []
-
-    for material in pauta["materiales"]:
-        acr_id = material["acr_id"]
-        fechas_activas = material["fechas_activas"]
-        horarios = [h["hora_exacta"] for h in material["horarios"]]
-        streams = material["streams"]
-
-        for stream in streams:
-            detecciones = consultar_acrcloud_stream(stream, hoy)
-            hits = detecciones.get("hits", [])
-            for hit in hits:
-                resultado = {
-                    "material": material["nombre"],
-                    "acr_id": acr_id,
-                    "stream_id": stream,
-                    "timestamp": hit.get("timestamp_utc", ""),
-                    "score": hit.get("score", ""),
-                    "track_id": hit.get("track_id", ""),
-                }
-                resultados.append(resultado)
-
-    df = pd.DataFrame(resultados)
-    archivo = "reporte.xlsx"
-    df.to_excel(archivo, index=False)
-
-    return FileResponse(
-        path=archivo,
-        filename=archivo,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    output.seek(0)
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={
+        "Content-Disposition": "attachment; filename=reporte.xlsx"
+    })
