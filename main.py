@@ -6,6 +6,7 @@ import io
 import httpx
 import openpyxl
 from collections import defaultdict
+from asyncio import gather
 
 ACRCLOUD_BASE_URL = "https://api-v2.acrcloud.com/api/bm-cs-projects"
 ACRCLOUD_BEARER_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiI3IiwianRpIjoiNjYwODQwOTYxMzRiNWM5NjljODY2NDMwMGNiZDFjNzllM2NmZjhiODBkN2Q0ZmY4MTMyYTFmN2QzNGI5NTBjMmFmNTk3ODNhMGJlYjRmMzciLCJpYXQiOjE3MzIyMjA3NDcuNzczMjI4LCJuYmYiOjE3MzIyMjA3NDcuNzczMjMxLCJleHAiOjIwNDc3NTM1NDcuNzI2MDMyLCJzdWIiOiIxNTMzMjUiLCJzY29wZXMiOlsiKiIsIndyaXRlLWFsbCIsInJlYWQtYWxsIiwiYnVja2V0cyIsIndyaXRlLWJ1Y2tldHMiLCJyZWFkLWJ1Y2tldHMiLCJhdWRpb3MiLCJ3cml0ZS1hdWRpb3MiLCJyZWFkLWF1ZGlvcyIsImNoYW5uZWxzIiwid3JpdGUtY2hhbm5lbHMiLCJyZWFkLWNoYW5uZWxzIiwiYmFzZS1wcm9qZWN0cyIsIndyaXRlLWJhc2UtcHJvamVjdHMiLCJyZWFkLWJhc2UtcHJvamVjdHMiLCJ1Y2YiLCJ3cml0ZS11Y2YiLCJyZWFkLXVjZiIsImRlbGV0ZS11Y2YiLCJibS1wcm9qZWN0cyIsImJtLWNzLXByb2plY3RzIiwid3JpdGUtYm0tY3MtcHJvamVjdHMiLCJyZWFkLWJtLWNzLXByb2plY3RzIiwiYm0tYmQtcHJvamVjdHMiLCJ3cml0ZS1ibS1iZC1wcm9qZWN0cyIsInJlYWQtYm0tYmQtcHJvamVjdHMiLCJmaWxlc2Nhbm5pbmciLCJ3cml0ZS1maWxlc2Nhbm5pbmciLCJyZWFkLWZpbGVzY2FubmluZyIsIm1ldGFkYXRhIiwicmVhZC1tZXRhZGF0YSJdfQ.b0XSJI7YCgd-AWGCLMdPJWo84470QNqovjtp34TKqrjlrnURCEqoI5jE3pBqqKqkVzh46HQjqtyIj7ge7JbNrEichHClKFIGW-JCrxYk-Oo8iDoWq8u-kCARPUrhAUMB_krK2PkkONN21gN4ZguFXgqBEZg2DwincaZhtDGKlM4MbQ9ctMgGapaHQXGa2SyoBQI9fZdNpQrTIplYznKZ2k8g86_8M9Be-tSpPBFEq0nwCKWF_Ya8USU_lxQUiOmAr4Wo5A0mi2FFeUIY7h4AhgP_LkgOwUMVt2JP95edVLlzUuRRVGkW1BG7536V4K51NOh4zr6tK28dixEQCuMj3nPHNG6w0VsT80yVU8mJTcOKxcjCexJNfwoyyAHRJblx6xsG2IZYECCJM0NFRv9GVMKLp2IUKTYM741HnpIGNowav6sNXsRgM8aVPXghf4jbJwfbuzC6XWD3hnQ0D5ybD-V9wAvkEJ0lIIDdkfrMZLW-bI1ju0oRV2CzFl-NpVRqjRp8tBM--6oq51LPx_qm_6CzZsUC6qQeBc1uFL39g_UbbmR4nT4y9w_ENSq1VDz9t8jDdas2arY8T1YzDQW1unbA2UfsyVc57YD4xjcWSLGrFbceS2SvQkGyqEHtB_riLZhl-x9rt8BCw73aFEu7WfOTOLgPs_y-rwgsVeQcKLc"
@@ -44,6 +45,47 @@ async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
         else:
             return {"error": response.text, "codigo": response.status_code, "detalle": f"Error en stream {stream_id} con fecha {date}"}
 
+async def fetch_all_results(materiales, proyecto_id):
+    tasks = []
+    for material in materiales:
+        for stream_id in material.stream_ids:
+            for fecha in material.fechas:
+                fechas_consulta = [fecha, (datetime.strptime(fecha, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")]
+                for fecha_consulta in fechas_consulta:
+                    fecha_formateada = fecha_consulta.replace("-", "")
+                    tasks.append((material, stream_id, fecha_formateada))
+
+    async def fetch(material, stream_id, fecha_formateada):
+        resultado = await get_results_from_acrcloud(proyecto_id, stream_id, fecha_formateada)
+        return (material, stream_id, resultado)
+
+    results_raw = await gather(*(fetch(m, s, f) for m, s, f in tasks))
+
+    resultados = []
+    for material, stream_id, resultado in results_raw:
+        if "error" in resultado:
+            continue
+        for deteccion in resultado.get("data", []):
+            timestamp_utc = deteccion.get("metadata", {}).get("timestamp_utc", "")
+            try:
+                dt_utc = datetime.strptime(timestamp_utc, "%Y-%m-%d %H:%M:%S")
+                dt_local = dt_utc + timedelta(hours=OFFSET_HORARIO)
+                hora_local = dt_local.strftime("%H:%M:%S")
+                fecha_local = dt_local.strftime("%Y-%m-%d")
+            except:
+                continue
+
+            for item in deteccion.get("metadata", {}).get("custom_files", []):
+                if item.get("acrid") == material.acr_id:
+                    resultados.append({
+                        "fecha": fecha_local,
+                        "hora": hora_local,
+                        "acr_id": material.acr_id,
+                        "titulo": item.get("title", ""),
+                        "stream": stream_id
+                    })
+    return resultados
+
 def generar_excel(data: dict, resumen: dict):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -76,7 +118,7 @@ def generar_excel(data: dict, resumen: dict):
         total_faltantes += faltantes
         total_fuera_horario += fuera_horario
 
-    resumen_ws.append(["TOTAL", "", total_detectados, total_faltantes, total_fuera_horario, total_detectados - total_faltantes + total_fuera_horario])
+    resumen_ws.append(["TOTAL", "", total_detectados, total_faltantes, total_fuera_horario, total_detectados + total_fuera_horario])
 
     output = io.BytesIO()
     wb.save(output)
@@ -85,36 +127,7 @@ def generar_excel(data: dict, resumen: dict):
 
 @app.post("/generar-reporte")
 async def generar_reporte(payload: ProyectoRequest):
-    resultados = []
-
-    for material in payload.materiales:
-        for stream_id in material.stream_ids:
-            for fecha in material.fechas:
-                for fecha_consulta in [fecha, (datetime.strptime(fecha, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")]:
-                    fecha_formateada = fecha_consulta.replace("-", "")
-                    resultado = await get_results_from_acrcloud(payload.proyecto_id, stream_id, fecha_formateada)
-                    if "error" in resultado:
-                        return JSONResponse(content=resultado, status_code=500)
-
-                    for deteccion in resultado.get("data", []):
-                        timestamp_utc = deteccion.get("metadata", {}).get("timestamp_utc", "")
-                        try:
-                            dt_utc = datetime.strptime(timestamp_utc, "%Y-%m-%d %H:%M:%S")
-                            dt_local = dt_utc + timedelta(hours=OFFSET_HORARIO)
-                            hora_local = dt_local.strftime("%H:%M:%S")
-                            fecha_local = dt_local.strftime("%Y-%m-%d")
-                        except:
-                            continue
-
-                        for item in deteccion.get("metadata", {}).get("custom_files", []):
-                            if item.get("acrid") == material.acr_id:
-                                resultados.append({
-                                    "fecha": fecha_local,
-                                    "hora": hora_local,
-                                    "acr_id": material.acr_id,
-                                    "titulo": item.get("title", ""),
-                                    "stream": stream_id
-                                })
+    resultados = await fetch_all_results(payload.materiales, payload.proyecto_id)
 
     faltantes = []
     resultados_finales = []
