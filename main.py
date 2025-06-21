@@ -34,6 +34,9 @@ class ProyectoRequest(BaseModel):
     materiales: list[Material]
     catalogo_streams: dict
 
+def obtener_nombre_stream(stream_id: str, catalogo_streams: dict) -> str:
+    return catalogo_streams.get(stream_id, {}).get("nombre", stream_id)
+
 async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
     url = f"{ACRCLOUD_BASE_URL}/{project_id}/streams/{stream_id}/results"
     params = {"date": date, "with_false_positive": 0}
@@ -45,7 +48,7 @@ async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
         else:
             return {"error": response.text, "codigo": response.status_code, "detalle": f"Error en stream {stream_id} con fecha {date}"}
 
-async def fetch_all_results(materiales, proyecto_id):
+async def fetch_all_results(materiales, proyecto_id, catalogo_streams):
     tasks = []
     for material in materiales:
         for stream_id in material.stream_ids:
@@ -82,7 +85,7 @@ async def fetch_all_results(materiales, proyecto_id):
                         "hora": hora_local,
                         "acr_id": material.acr_id,
                         "titulo": item.get("title", ""),
-                        "stream": stream_id
+                        "stream": obtener_nombre_stream(stream_id, catalogo_streams)
                     })
     return resultados
 
@@ -127,7 +130,7 @@ def generar_excel(data: dict, resumen: dict):
 
 @app.post("/generar-reporte")
 async def generar_reporte(payload: ProyectoRequest):
-    resultados = await fetch_all_results(payload.materiales, payload.proyecto_id)
+    resultados = await fetch_all_results(payload.materiales, payload.proyecto_id, payload.catalogo_streams)
 
     faltantes = []
     resultados_finales = []
@@ -136,13 +139,14 @@ async def generar_reporte(payload: ProyectoRequest):
 
     for material in payload.materiales:
         for stream_id in material.stream_ids:
+            nombre_stream = obtener_nombre_stream(stream_id, payload.catalogo_streams)
             for fecha in material.fechas:
                 for hora in material.horarios:
                     hora_objetivo_dt = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
                     detectado = None
 
                     for r in resultados:
-                        if r["acr_id"] == material.acr_id and r["stream"] == stream_id:
+                        if r["acr_id"] == material.acr_id and r["stream"] == nombre_stream:
                             try:
                                 hora_detectada_dt = datetime.strptime(f"{r['fecha']} {r['hora']}", "%Y-%m-%d %H:%M:%S")
                             except:
@@ -159,18 +163,18 @@ async def generar_reporte(payload: ProyectoRequest):
 
                     if detectado:
                         resultados_finales.append(detectado)
-                        resumen_diario[(fecha, stream_id)]["detectados"] += 1
+                        resumen_diario[(fecha, nombre_stream)]["detectados"] += 1
                     else:
                         faltantes.append({
                             "fecha": fecha,
                             "hora_pautada": hora,
                             "acr_id": material.acr_id,
-                            "stream": stream_id
+                            "stream": nombre_stream
                         })
-                        resumen_diario[(fecha, stream_id)]["faltantes"] += 1
+                        resumen_diario[(fecha, nombre_stream)]["faltantes"] += 1
 
             for r in resultados:
-                if r["acr_id"] == material.acr_id and r["stream"] == stream_id:
+                if r["acr_id"] == material.acr_id and r["stream"] == nombre_stream:
                     ya_detectado = any(
                         d["fecha"] == r["fecha"] and d["hora"] == r["hora"] and d["stream"] == r["stream"] for d in resultados_finales
                     )
