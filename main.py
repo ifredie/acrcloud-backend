@@ -90,30 +90,31 @@ async def generar_reporte(payload: ProyectoRequest):
     for material in payload.materiales:
         for stream_id in material.stream_ids:
             for fecha in material.fechas:
-                fecha_formateada = fecha.replace("-", "")
-                resultado = await get_results_from_acrcloud(payload.proyecto_id, stream_id, fecha_formateada)
-                if "error" in resultado:
-                    return JSONResponse(content=resultado, status_code=500)
+                for fecha_consulta in [fecha, (datetime.strptime(fecha, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")]:
+                    fecha_formateada = fecha_consulta.replace("-", "")
+                    resultado = await get_results_from_acrcloud(payload.proyecto_id, stream_id, fecha_formateada)
+                    if "error" in resultado:
+                        return JSONResponse(content=resultado, status_code=500)
 
-                for deteccion in resultado.get("data", []):
-                    timestamp_utc = deteccion.get("metadata", {}).get("timestamp_utc", "")
-                    try:
-                        dt_utc = datetime.strptime(timestamp_utc, "%Y-%m-%d %H:%M:%S")
-                        dt_local = dt_utc + timedelta(hours=OFFSET_HORARIO)
-                        hora_local = dt_local.strftime("%H:%M")
-                        fecha_local = dt_local.strftime("%Y-%m-%d")
-                    except:
-                        continue
+                    for deteccion in resultado.get("data", []):
+                        timestamp_utc = deteccion.get("metadata", {}).get("timestamp_utc", "")
+                        try:
+                            dt_utc = datetime.strptime(timestamp_utc, "%Y-%m-%d %H:%M:%S")
+                            dt_local = dt_utc + timedelta(hours=OFFSET_HORARIO)
+                            hora_local = dt_local.strftime("%H:%M")
+                            fecha_local = dt_local.strftime("%Y-%m-%d")
+                        except:
+                            continue
 
-                    for item in deteccion.get("metadata", {}).get("custom_files", []):
-                        if item.get("acrid") == material.acr_id:
-                            resultados.append({
-                                "fecha": fecha_local,
-                                "hora": hora_local,
-                                "acr_id": material.acr_id,
-                                "titulo": item.get("title", ""),
-                                "stream": stream_id
-                            })
+                        for item in deteccion.get("metadata", {}).get("custom_files", []):
+                            if item.get("acrid") == material.acr_id:
+                                resultados.append({
+                                    "fecha": fecha_local,
+                                    "hora": hora_local,
+                                    "acr_id": material.acr_id,
+                                    "titulo": item.get("title", ""),
+                                    "stream": stream_id
+                                })
 
     faltantes = []
     resultados_finales = []
