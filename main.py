@@ -14,30 +14,30 @@ app = FastAPI()
 
 class Material(BaseModel):
     acr_id: str
-    fechas: list[str]  # formato YYYYMMDD
-    horarios: list[str]  # formato HH:MM
+    fechas: list[str]
+    fechas_activas: list[str]
+    horarios: list[str]
+    stream_id: str
     stream_ids: list[str]
     categoria: str
     conflictos: list[str] = []
 
 class ProyectoRequest(BaseModel):
     proyecto_id: str
+    nombre: str
     cliente: str
     marca: str
     producto: str
     tipo_cliente: str
     tolerancia_minutos: int
-    tipo_reporte: list[str]
+    tipos_reporte: list[str]
     destinatarios: list[str]
-    materiales: list[Material]
     catalogo_streams: dict
+    materiales: list[Material]
 
 async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
     url = f"{ACRCLOUD_BASE_URL}/{project_id}/streams/{stream_id}/results"
-    params = {
-        "date": date,
-        "with_false_positive": 0
-    }
+    params = {"date": date, "with_false_positive": 0}
     headers = {
         "Authorization": f"Bearer {ACRCLOUD_BEARER_TOKEN}",
         "Accept": "application/json"
@@ -46,8 +46,7 @@ async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
         response = await client.get(url, headers=headers, params=params)
         if response.status_code == 200:
             return response.json()
-        else:
-            return {"error": response.text}
+        return {"error": response.text}
 
 def generar_excel(data: dict):
     wb = openpyxl.Workbook()
@@ -81,6 +80,7 @@ def generar_excel(data: dict):
 @app.post("/generar-reporte")
 async def generar_reporte(payload: ProyectoRequest):
     resultados = []
+
     for material in payload.materiales:
         for stream_id in material.stream_ids:
             for fecha in material.fechas:
@@ -103,14 +103,15 @@ async def generar_reporte(payload: ProyectoRequest):
                                 "stream": stream_id
                             })
 
-    # Generar lista de faltantes
     faltantes = []
     for material in payload.materiales:
         for fecha in material.fechas:
             for hora in material.horarios:
                 for stream_id in material.stream_ids:
                     encontrado = any(
-                        r["fecha"] == fecha and r["hora"] == hora and r["acr_id"] == material.acr_id and r["stream"] == stream_id
+                        r["fecha"] == fecha and r["hora"] == hora and
+                        r["acr_id"] == material.acr_id and
+                        r["stream"] == stream_id
                         for r in resultados
                     )
                     if not encontrado:
@@ -125,4 +126,8 @@ async def generar_reporte(payload: ProyectoRequest):
     fecha_actual = datetime.now().strftime("%Y%m%d%H%M%S")
     filename = f"reporte_{fecha_actual}.xlsx"
 
-    return StreamingResponse(excel, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    return StreamingResponse(
+        excel,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
