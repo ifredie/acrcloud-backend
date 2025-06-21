@@ -8,3 +8,4 @@ openpyxl
 XlsxWriter
 python-multipart
 pydantic[email]
+httpx
