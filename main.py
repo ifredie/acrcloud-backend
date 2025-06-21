@@ -13,8 +13,8 @@ app = FastAPI()
 
 class Material(BaseModel):
     acr_id: str
-    fechas: list[str]  # formato YYYY-MM-DD
-    horarios: list[str]  # formato HH:MM
+    fechas: list[str]
+    horarios: list[str]
     stream_ids: list[str]
     categoria: str
     conflictos: list[str] = []
@@ -76,7 +76,7 @@ async def generar_reporte(payload: ProyectoRequest):
     for material in payload.materiales:
         for stream_id in material.stream_ids:
             for fecha in material.fechas:
-                for extra in [0, 1]:  # Consultar el día y el día siguiente
+                for extra in [0, 1]:
                     fecha_obj = datetime.strptime(fecha, "%Y-%m-%d") + timedelta(days=extra)
                     fecha_formateada = fecha_obj.strftime("%Y%m%d")
                     if (stream_id, fecha_formateada) in fechas_consultadas:
@@ -137,7 +137,6 @@ async def generar_reporte(payload: ProyectoRequest):
                             "stream": stream_id
                         })
 
-    # Agregar fuera de horario
     for r in resultados:
         key = (r['fecha'], r['hora'], r['acr_id'], r['stream'])
         if key not in detectados_ids:
