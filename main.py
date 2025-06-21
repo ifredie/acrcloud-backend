@@ -1,80 +1,43 @@
-import os
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
-from typing import List
-from dotenv import load_dotenv
-from datetime import datetime
+from typing import Optional
 import httpx
-import pandas as pd
-from fastapi.responses import FileResponse
-
-load_dotenv()
 
 app = FastAPI()
 
-ACR_TOKEN = os.getenv("ACR_BEARER_TOKEN")
+# Token de autenticación Bearer (pon tu token real aquí)
+ACRCLOUD_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiI3IiwianRpIjoiNjYwODQwOTYxMzRiNWM5NjljODY2NDMwMGNiZDFjNzllM2NmZjhiODBkN2Q0ZmY4MTMyYTFmN2QzNGI5NTBjMmFmNTk3ODNhMGJlYjRmMzciLCJpYXQiOjE3MzIyMjA3NDcuNzczMjI4LCJuYmYiOjE3MzIyMjA3NDcuNzczMjMxLCJleHAiOjIwNDc3NTM1NDcuNzI2MDMyLCJzdWIiOiIxNTMzMjUiLCJzY29wZXMiOlsiKiIsIndyaXRlLWFsbCIsInJlYWQtYWxsIiwiYnVja2V0cyIsIndyaXRlLWJ1Y2tldHMiLCJyZWFkLWJ1Y2tldHMiLCJhdWRpb3MiLCJ3cml0ZS1hdWRpb3MiLCJyZWFkLWF1ZGlvcyIsImNoYW5uZWxzIiwid3JpdGUtY2hhbm5lbHMiLCJyZWFkLWNoYW5uZWxzIiwiYmFzZS1wcm9qZWN0cyIsIndyaXRlLWJhc2UtcHJvamVjdHMiLCJyZWFkLWJhc2UtcHJvamVjdHMiLCJ1Y2YiLCJ3cml0ZS11Y2YiLCJyZWFkLXVjZiIsImRlbGV0ZS11Y2YiLCJibS1wcm9qZWN0cyIsImJtLWNzLXByb2plY3RzIiwid3JpdGUtYm0tY3MtcHJvamVjdHMiLCJyZWFkLWJtLWNzLXByb2plY3RzIiwiYm0tYmQtcHJvamVjdHMiLCJ3cml0ZS1ibS1iZC1wcm9qZWN0cyIsInJlYWQtYm0tYmQtcHJvamVjdHMiLCJmaWxlc2Nhbm5pbmciLCJ3cml0ZS1maWxlc2Nhbm5pbmciLCJyZWFkLWZpbGVzY2FubmluZyIsIm1ldGFkYXRhIiwicmVhZC1tZXRhZGF0YSJdfQ.b0XSJI7YCgd-AWGCLMdPJWo84470QNqovjtp34TKqrjlrnURCEqoI5jE3pBqqKqkVzh46HQjqtyIj7ge7JbNrEichHClKFIGW-JCrxYk-Oo8iDoWq8u-kCARPUrhAUMB_krK2PkkONN21gN4ZguFXgqBEZg2DwincaZhtDGKlM4MbQ9ctMgGapaHQXGa2SyoBQI9fZdNpQrTIplYznKZ2k8g86_8M9Be-tSpPBFEq0nwCKWF_Ya8USU_lxQUiOmAr4Wo5A0mi2FFeUIY7h4AhgP_LkgOwUMVt2JP95edVLlzUuRRVGkW1BG7536V4K51NOh4zr6tK28dixEQCuMj3nPHNG6w0VsT80yVU8mJTcOKxcjCexJNfwoyyAHRJblx6xsG2IZYECCJM0NFRv9GVMKLp2IUKTYM741HnpIGNowav6sNXsRgM8aVPXghf4jbJwfbuzC6XWD3hnQ0D5ybD-V9wAvkEJ0lIIDdkfrMZLW-bI1ju0oRV2CzFl-NpVRqjRp8tBM--6oq51LPx_qm_6CzZsUC6qQeBc1uFL39g_UbbmR4nT4y9w_ENSq1VDz9t8jDdas2arY8T1YzDQW1unbA2UfsyVc57YD4xjcWSLGrFbceS2SvQkGyqEHtB_riLZhl-x9rt8BCw73aFEu7WfOTOLgPs_y-rwgsVeQcKLc"  # <--- reemplaza esto
 
-class ReportRequest(BaseModel):
-    acr_id: str
+# Modelo de entrada
+class ConsultaACR(BaseModel):
     project_id: int
     stream_id: str
-    fechas: List[str]  # formato: "20250610"
-    horas: List[str]   # formato: "08:45"
-    tolerancia_minutos: int
-
-def convertir_a_minutos(hora_str):
-    h, m = map(int, hora_str.split(":"))
-    return h * 60 + m
+    date: str  # Formato YYYYMMDD
+    with_false_positive: Optional[int] = 0  # 0 por defecto
 
 @app.post("/generar-reporte")
-async def generar_reporte(data: ReportRequest):
+async def generar_reporte(data: ConsultaACR):
+    url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{data.project_id}/streams/{data.stream_id}/results"
     headers = {
-        "Authorization": f"Bearer {ACR_TOKEN}",
+        "Authorization": f"Bearer {ACRCLOUD_TOKEN}",
         "Accept": "application/json"
     }
+    params = {
+        "date": data.date,
+        "with_false_positive": data.with_false_positive
+    }
 
-    pautados = []
-    detectados = []
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers, params=params)
 
-    for fecha in data.fechas:
-        url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{data.project_id}/streams/{data.stream_id}/results"
-        params = {"date": fecha, "with_false_positive": 0}
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, headers=headers, params=params)
-                response.raise_for_status()
-                results = response.json()["data"]
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al consultar ACRCloud: {e}")
+    if response.status_code != 200:
+        return {
+            "status": "error",
+            "code": response.status_code,
+            "detail": response.text
+        }
 
-        # Filtrar resultados que coincidan con acr_id
-        resultados_filtrados = [
-            r for r in results
-            if r.get("metadata", {}).get("music", [{}])[0].get("acrid") == data.acr_id
-        ]
-
-        resultados_por_minuto = [
-            convertir_a_minutos(r["metadata"]["timestamp_utc"][11:16])
-            for r in resultados_filtrados
-        ]
-
-        for hora_str in data.horas:
-            pauta_min = convertir_a_minutos(hora_str)
-            encontrado = False
-            for resultado_min in resultados_por_minuto:
-                if abs(resultado_min - pauta_min) <= data.tolerancia_minutos:
-                    encontrado = True
-                    break
-            registro = {
-                "fecha": fecha,
-                "hora_pautada": hora_str,
-                "estado": "Detectado" if encontrado else "No detectado"
-            }
-            (detectados if encontrado else pautados).append(registro)
-
-    df = pd.DataFrame(pautados + detectados)
-    filename = f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    filepath = f"/tmp/{filename}"
-    df.to_excel(filepath, index=False)
-
-    return FileResponse(filepath, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return {
+        "status": "success",
+        "data": response.json()
+    }
