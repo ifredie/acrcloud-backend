@@ -82,9 +82,9 @@ async def fetch_all_results(materiales, proyecto_id, catalogo_streams):
                 if item.get("acrid") == material.acr_id:
                     nombre_stream = deteccion.get("stream", {}).get("name", stream_id)
                     duracion_segundos = item.get("duration_ms", 60000) // 1000
-record_before = 3
-record_after = 3
-recording_url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{proyecto_id}/streams/{stream_id}/recordings?timestamp_utc={dt_utc.strftime('%Y%m%d%H%M%S')}&played_duration={duracion_segundos}&record_before={record_before}&record_after={record_after}"
+    record_before = 3
+    record_after = 3
+    recording_url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{proyecto_id}/streams/{stream_id}/recordings?timestamp_utc={dt_utc.strftime('%Y%m%d%H%M%S')}&played_duration={duracion_segundos}&record_before={record_before}&record_after={record_after}"
 
                     resultados.append({
                         "fecha": fecha_local,
