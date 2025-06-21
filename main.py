@@ -14,7 +14,7 @@ app = FastAPI()
 
 class Material(BaseModel):
     acr_id: str
-    fechas: list[str]  # formato YYYYMMDD
+    fechas: list[str]  # formato YYYY-MM-DD desde Bubble
     horarios: list[str]  # formato HH:MM
     stream_ids: list[str]
     categoria: str
@@ -81,32 +81,32 @@ def generar_excel(data: dict):
 @app.post("/generar-reporte")
 async def generar_reporte(payload: ProyectoRequest):
     resultados = []
+
     for material in payload.materiales:
         for stream_id in material.stream_ids:
             for fecha in material.fechas:
+                fecha_formateada = fecha.replace("-", "")  # Convertir a formato YYYYMMDD
                 resultado = await get_results_from_acrcloud(
                     payload.proyecto_id,
                     stream_id,
-                    fecha
+                    fecha_formateada
                 )
                 if "error" in resultado:
                     return JSONResponse(content=resultado, status_code=500)
 
                 for deteccion in resultado.get("data", []):
-                    utc_timestamp = deteccion.get("metadata", {}).get("timestamp_utc", "")
-                    if not utc_timestamp:
-                        continue
-                    try:
-                        dt_utc = datetime.strptime(utc_timestamp, "%Y-%m-%dT%H:%M:%S")
-                    except ValueError:
-                        continue
-
-                    dt_local = dt_utc - timedelta(hours=6)
-                    hora_local = dt_local.strftime("%H:%M")
-                    fecha_local = dt_local.strftime("%Y-%m-%d")
-
                     for item in deteccion.get("metadata", {}).get("custom_files", []):
                         if item.get("acrid") == material.acr_id:
+                            timestamp_utc = deteccion.get("metadata", {}).get("timestamp_utc", "")
+                            try:
+                                dt_utc = datetime.strptime(timestamp_utc, "%Y-%m-%d %H:%M:%S")
+                                dt_local = dt_utc - timedelta(hours=6)  # Guatemala UTC-6
+                                hora_local = dt_local.strftime("%H:%M")
+                                fecha_local = dt_local.strftime("%Y-%m-%d")
+                            except:
+                                hora_local = ""
+                                fecha_local = fecha
+
                             resultados.append({
                                 "fecha": fecha_local,
                                 "hora": hora_local,
@@ -121,21 +121,18 @@ async def generar_reporte(payload: ProyectoRequest):
         for fecha in material.fechas:
             for hora in material.horarios:
                 for stream_id in material.stream_ids:
-                    objetivo_dt = datetime.strptime(f"{fecha} {hora}", "%Y%m%d %H:%M")
-                    encontrado = False
-                    for r in resultados:
-                        r_dt = datetime.strptime(f"{r['fecha']} {r['hora']}", "%Y-%m-%d %H:%M")
-                        if (
-                            r["acr_id"] == material.acr_id and
-                            r["stream"] == stream_id and
-                            abs((r_dt - objetivo_dt).total_seconds()) <= payload.tolerancia_minutos * 60
-                        ):
-                            encontrado = True
-                            break
+                    hora_objetivo_dt = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
+                    encontrado = any(
+                        r["acr_id"] == material.acr_id and
+                        r["stream"] == stream_id and
+                        datetime.strptime(f"{r['fecha']} {r['hora']}", "%Y-%m-%d %H:%M") >= (hora_objetivo_dt - timedelta(minutes=payload.tolerancia_minutos)) and
+                        datetime.strptime(f"{r['fecha']} {r['hora']}", "%Y-%m-%d %H:%M") <= (hora_objetivo_dt + timedelta(minutes=payload.tolerancia_minutos))
+                        for r in resultados
+                    )
                     if not encontrado:
                         faltantes.append({
-                            "fecha": objetivo_dt.strftime("%Y-%m-%d"),
-                            "hora": objetivo_dt.strftime("%H:%M"),
+                            "fecha": fecha,
+                            "hora": hora,
                             "acr_id": material.acr_id,
                             "stream": stream_id
                         })
