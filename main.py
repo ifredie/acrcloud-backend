@@ -1,11 +1,10 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 import io
 import httpx
 import openpyxl
-import os
 
 ACRCLOUD_BASE_URL = "https://api-v2.acrcloud.com/api/bm-cs-projects"
 ACRCLOUD_BEARER_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiI3IiwianRpIjoiNjYwODQwOTYxMzRiNWM5NjljODY2NDMwMGNiZDFjNzllM2NmZjhiODBkN2Q0ZmY4MTMyYTFmN2QzNGI5NTBjMmFmNTk3ODNhMGJlYjRmMzciLCJpYXQiOjE3MzIyMjA3NDcuNzczMjI4LCJuYmYiOjE3MzIyMjA3NDcuNzczMjMxLCJleHAiOjIwNDc3NTM1NDcuNzI2MDMyLCJzdWIiOiIxNTMzMjUiLCJzY29wZXMiOlsiKiIsIndyaXRlLWFsbCIsInJlYWQtYWxsIiwiYnVja2V0cyIsIndyaXRlLWJ1Y2tldHMiLCJyZWFkLWJ1Y2tldHMiLCJhdWRpb3MiLCJ3cml0ZS1hdWRpb3MiLCJyZWFkLWF1ZGlvcyIsImNoYW5uZWxzIiwid3JpdGUtY2hhbm5lbHMiLCJyZWFkLWNoYW5uZWxzIiwiYmFzZS1wcm9qZWN0cyIsIndyaXRlLWJhc2UtcHJvamVjdHMiLCJyZWFkLWJhc2UtcHJvamVjdHMiLCJ1Y2YiLCJ3cml0ZS11Y2YiLCJyZWFkLXVjZiIsImRlbGV0ZS11Y2YiLCJibS1wcm9qZWN0cyIsImJtLWNzLXByb2plY3RzIiwid3JpdGUtYm0tY3MtcHJvamVjdHMiLCJyZWFkLWJtLWNzLXByb2plY3RzIiwiYm0tYmQtcHJvamVjdHMiLCJ3cml0ZS1ibS1iZC1wcm9qZWN0cyIsInJlYWQtYm0tYmQtcHJvamVjdHMiLCJmaWxlc2Nhbm5pbmciLCJ3cml0ZS1maWxlc2Nhbm5pbmciLCJyZWFkLWZpbGVzY2FubmluZyIsIm1ldGFkYXRhIiwicmVhZC1tZXRhZGF0YSJdfQ.b0XSJI7YCgd-AWGCLMdPJWo84470QNqovjtp34TKqrjlrnURCEqoI5jE3pBqqKqkVzh46HQjqtyIj7ge7JbNrEichHClKFIGW-JCrxYk-Oo8iDoWq8u-kCARPUrhAUMB_krK2PkkONN21gN4ZguFXgqBEZg2DwincaZhtDGKlM4MbQ9ctMgGapaHQXGa2SyoBQI9fZdNpQrTIplYznKZ2k8g86_8M9Be-tSpPBFEq0nwCKWF_Ya8USU_lxQUiOmAr4Wo5A0mi2FFeUIY7h4AhgP_LkgOwUMVt2JP95edVLlzUuRRVGkW1BG7536V4K51NOh4zr6tK28dixEQCuMj3nPHNG6w0VsT80yVU8mJTcOKxcjCexJNfwoyyAHRJblx6xsG2IZYECCJM0NFRv9GVMKLp2IUKTYM741HnpIGNowav6sNXsRgM8aVPXghf4jbJwfbuzC6XWD3hnQ0D5ybD-V9wAvkEJ0lIIDdkfrMZLW-bI1ju0oRV2CzFl-NpVRqjRp8tBM--6oq51LPx_qm_6CzZsUC6qQeBc1uFL39g_UbbmR4nT4y9w_ENSq1VDz9t8jDdas2arY8T1YzDQW1unbA2UfsyVc57YD4xjcWSLGrFbceS2SvQkGyqEHtB_riLZhl-x9rt8BCw73aFEu7WfOTOLgPs_y-rwgsVeQcKLc"
@@ -14,7 +13,7 @@ app = FastAPI()
 
 class Material(BaseModel):
     acr_id: str
-    fechas: list[str]  # formato YYYYMMDD
+    fechas: list[str]  # formato YYYY-MM-DD
     horarios: list[str]  # formato HH:MM
     stream_ids: list[str]
     categoria: str
@@ -49,21 +48,43 @@ async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
         else:
             return {"error": response.text, "codigo": response.status_code, "detalle": f"Error en stream {stream_id} con fecha {date}"}
 
-def generar_excel(data: list[dict]):
+def generar_excel(data: dict):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Resultados"
-    ws.append(["Fecha", "Hora", "ACR_ID", "Título", "Stream", "Estado", "Hora esperada"])
+    ws.append(["Fecha", "Hora Detectada", "Hora Pautada", "ACR_ID", "Título", "Stream", "Estado"])
 
-    for item in data:
+    for item in data.get("detectado", []):
         ws.append([
             item["fecha"],
-            item["hora_detectada"],
+            item["hora"],
+            item["hora_pautada"],
             item["acr_id"],
-            item.get("titulo", ""),
+            item["titulo"],
             item["stream"],
-            item["estado"],
-            item["hora_esperada"]
+            "DETECTADO"
+        ])
+
+    for item in data.get("fuera_horario", []):
+        ws.append([
+            item["fecha"],
+            item["hora"],
+            item["hora_pautada"],
+            item["acr_id"],
+            item["titulo"],
+            item["stream"],
+            "FUERA DE HORARIO"
+        ])
+
+    for item in data.get("faltantes", []):
+        ws.append([
+            item["fecha"],
+            "",
+            item["hora_pautada"],
+            item["acr_id"],
+            "FALTANTE",
+            item["stream"],
+            "FALTANTE"
         ])
 
     output = io.BytesIO()
@@ -76,79 +97,79 @@ async def generar_reporte(payload: ProyectoRequest):
     resultados = []
 
     for material in payload.materiales:
-        for fecha in material.fechas:
-            fecha_api = fecha.replace("-", "")  # Asegura el formato correcto YYYYMMDD
-            for stream_id in material.stream_ids:
-                resultado = await get_results_from_acrcloud(payload.proyecto_id, stream_id, fecha_api)
+        for stream_id in material.stream_ids:
+            for fecha in material.fechas:
+                fecha_formateada = fecha.replace("-", "")
+                resultado = await get_results_from_acrcloud(
+                    payload.proyecto_id,
+                    stream_id,
+                    fecha_formateada
+                )
                 if "error" in resultado:
                     return JSONResponse(content=resultado, status_code=500)
 
                 for deteccion in resultado.get("data", []):
-                    timestamp_utc = deteccion.get("metadata", {}).get("timestamp_utc", "")
-                    try:
-                        dt_utc = datetime.strptime(timestamp_utc, "%Y-%m-%dT%H:%M:%S")
-                        dt_local = dt_utc - timedelta(hours=6)
-                        hora_local = dt_local.strftime("%H:%M")
-                        fecha_local = dt_local.strftime("%Y%m%d")
-                    except Exception:
-                        continue
-
                     for item in deteccion.get("metadata", {}).get("custom_files", []):
                         if item.get("acrid") == material.acr_id:
+                            timestamp_utc = deteccion.get("metadata", {}).get("timestamp_utc", "")
+                            try:
+                                dt_utc = datetime.strptime(timestamp_utc, "%Y-%m-%d %H:%M:%S")
+                                dt_local = dt_utc - timedelta(hours=6)
+                                hora_local = dt_local.strftime("%H:%M")
+                                fecha_local = dt_local.strftime("%Y-%m-%d")
+                            except:
+                                hora_local = ""
+                                fecha_local = fecha
+
                             resultados.append({
                                 "fecha": fecha_local,
-                                "hora_detectada": hora_local,
+                                "hora": hora_local,
                                 "acr_id": material.acr_id,
                                 "titulo": item.get("title", ""),
-                                "stream": stream_id,
-                                "estado": "detectado",
-                                "hora_esperada": ""
+                                "stream": stream_id
                             })
 
-    todos_resultados = resultados[:]
+    detectado = []
+    fuera_horario = []
+    faltantes = []
 
     for material in payload.materiales:
-        for fecha in material.fechas:
-            for hora_objetivo in material.horarios:
-                for stream_id in material.stream_ids:
-                    dt_objetivo = datetime.strptime(f"{fecha} {hora_objetivo}", "%Y%m%d %H:%M")
-                    margen = timedelta(minutes=payload.tolerancia_minutos)
-
-                    detectado_en_rango = False
-                    fuera_de_horario = False
+        for stream_id in material.stream_ids:
+            for fecha in material.fechas:
+                for hora in material.horarios:
+                    hora_objetivo_dt = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
+                    encontrado = False
 
                     for r in resultados:
-                        if r["acr_id"] == material.acr_id and r["stream"] == stream_id and r["fecha"] == fecha:
-                            dt_detectado = datetime.strptime(f"{fecha} {r['hora_detectada']}", "%Y%m%d %H:%M")
-                            if abs(dt_detectado - dt_objetivo) <= margen:
-                                detectado_en_rango = True
-                                r["hora_esperada"] = hora_objetivo
+                        if r["acr_id"] == material.acr_id and r["stream"] == stream_id:
+                            hora_detectada_dt = datetime.strptime(f"{r['fecha']} {r['hora']}", "%Y-%m-%d %H:%M")
+                            diferencia = abs((hora_detectada_dt - hora_objetivo_dt).total_seconds())
+                            if diferencia <= payload.tolerancia_minutos * 60:
+                                detectado.append({**r, "hora_pautada": hora})
+                                encontrado = True
                                 break
-                            else:
-                                fuera_de_horario = True
+                            elif r["fecha"] == fecha:
+                                fuera_horario.append({**r, "hora_pautada": hora})
 
-                    if not detectado_en_rango:
-                        if fuera_de_horario:
-                            todos_resultados.append({
-                                "fecha": fecha,
-                                "hora_detectada": r["hora_detectada"],
-                                "acr_id": material.acr_id,
-                                "titulo": r.get("titulo", ""),
-                                "stream": stream_id,
-                                "estado": "fuera de horario",
-                                "hora_esperada": hora_objetivo
-                            })
-                        else:
-                            todos_resultados.append({
-                                "fecha": fecha,
-                                "hora_detectada": "",
-                                "acr_id": material.acr_id,
-                                "titulo": "",
-                                "stream": stream_id,
-                                "estado": "faltante",
-                                "hora_esperada": hora_objetivo
-                            })
+                    if not encontrado:
+                        faltantes.append({
+                            "fecha": fecha,
+                            "hora_pautada": hora,
+                            "acr_id": material.acr_id,
+                            "stream": stream_id
+                        })
 
-    excel = generar_excel(todos_resultados)
-    filename = f"reporte_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
-    return StreamingResponse(excel, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    excel = generar_excel({
+        "detectado": detectado,
+        "fuera_horario": fuera_horario,
+        "faltantes": faltantes
+    })
+
+    fecha_actual = datetime.now().strftime("%Y%m%d%H%M%S")
+    filename = f"reporte_{fecha_actual}.xlsx"
+
+    return StreamingResponse(
+        excel,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
