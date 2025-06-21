@@ -1,43 +1,91 @@
+import uvicorn
 from fastapi import FastAPI, Request
-from pydantic import BaseModel
-from typing import Optional
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, EmailStr
+from typing import List
+from datetime import datetime, timedelta
+import pandas as pd
+import io
 import httpx
 
 app = FastAPI()
 
-# Token de autenticación Bearer (pon tu token real aquí)
-ACRCLOUD_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiI3IiwianRpIjoiNjYwODQwOTYxMzRiNWM5NjljODY2NDMwMGNiZDFjNzllM2NmZjhiODBkN2Q0ZmY4MTMyYTFmN2QzNGI5NTBjMmFmNTk3ODNhMGJlYjRmMzciLCJpYXQiOjE3MzIyMjA3NDcuNzczMjI4LCJuYmYiOjE3MzIyMjA3NDcuNzczMjMxLCJleHAiOjIwNDc3NTM1NDcuNzI2MDMyLCJzdWIiOiIxNTMzMjUiLCJzY29wZXMiOlsiKiIsIndyaXRlLWFsbCIsInJlYWQtYWxsIiwiYnVja2V0cyIsIndyaXRlLWJ1Y2tldHMiLCJyZWFkLWJ1Y2tldHMiLCJhdWRpb3MiLCJ3cml0ZS1hdWRpb3MiLCJyZWFkLWF1ZGlvcyIsImNoYW5uZWxzIiwid3JpdGUtY2hhbm5lbHMiLCJyZWFkLWNoYW5uZWxzIiwiYmFzZS1wcm9qZWN0cyIsIndyaXRlLWJhc2UtcHJvamVjdHMiLCJyZWFkLWJhc2UtcHJvamVjdHMiLCJ1Y2YiLCJ3cml0ZS11Y2YiLCJyZWFkLXVjZiIsImRlbGV0ZS11Y2YiLCJibS1wcm9qZWN0cyIsImJtLWNzLXByb2plY3RzIiwid3JpdGUtYm0tY3MtcHJvamVjdHMiLCJyZWFkLWJtLWNzLXByb2plY3RzIiwiYm0tYmQtcHJvamVjdHMiLCJ3cml0ZS1ibS1iZC1wcm9qZWN0cyIsInJlYWQtYm0tYmQtcHJvamVjdHMiLCJmaWxlc2Nhbm5pbmciLCJ3cml0ZS1maWxlc2Nhbm5pbmciLCJyZWFkLWZpbGVzY2FubmluZyIsIm1ldGFkYXRhIiwicmVhZC1tZXRhZGF0YSJdfQ.b0XSJI7YCgd-AWGCLMdPJWo84470QNqovjtp34TKqrjlrnURCEqoI5jE3pBqqKqkVzh46HQjqtyIj7ge7JbNrEichHClKFIGW-JCrxYk-Oo8iDoWq8u-kCARPUrhAUMB_krK2PkkONN21gN4ZguFXgqBEZg2DwincaZhtDGKlM4MbQ9ctMgGapaHQXGa2SyoBQI9fZdNpQrTIplYznKZ2k8g86_8M9Be-tSpPBFEq0nwCKWF_Ya8USU_lxQUiOmAr4Wo5A0mi2FFeUIY7h4AhgP_LkgOwUMVt2JP95edVLlzUuRRVGkW1BG7536V4K51NOh4zr6tK28dixEQCuMj3nPHNG6w0VsT80yVU8mJTcOKxcjCexJNfwoyyAHRJblx6xsG2IZYECCJM0NFRv9GVMKLp2IUKTYM741HnpIGNowav6sNXsRgM8aVPXghf4jbJwfbuzC6XWD3hnQ0D5ybD-V9wAvkEJ0lIIDdkfrMZLW-bI1ju0oRV2CzFl-NpVRqjRp8tBM--6oq51LPx_qm_6CzZsUC6qQeBc1uFL39g_UbbmR4nT4y9w_ENSq1VDz9t8jDdas2arY8T1YzDQW1unbA2UfsyVc57YD4xjcWSLGrFbceS2SvQkGyqEHtB_riLZhl-x9rt8BCw73aFEu7WfOTOLgPs_y-rwgsVeQcKLc"  # <--- reemplaza esto
+ACRCLOUD_BASE_URL = "https://api.acrcloud.com/v1/monitor-streams"
+BEARER_TOKEN = "TU_BEARER_TOKEN_AQUI"
 
-# Modelo de entrada
-class ConsultaACR(BaseModel):
-    project_id: int
+class Material(BaseModel):
+    acr_id: str
+    fechas_activas: List[str]
+    horarios: List[str]
     stream_id: str
-    date: str  # Formato YYYYMMDD
-    with_false_positive: Optional[int] = 0  # 0 por defecto
+    categoria: str
+    conflictos: List[str]
+
+class ProyectoRequest(BaseModel):
+    proyecto_id: int
+    nombre: str
+    cliente: str
+    tipo_cliente: str
+    tolerancia_minutos: int
+    tipos_reporte: List[str]
+    destinatarios: List[EmailStr]
+    materiales: List[Material]
+    streams_catalogo: dict
 
 @app.post("/generar-reporte")
-async def generar_reporte(data: ConsultaACR):
-    url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{data.project_id}/streams/{data.stream_id}/results"
-    headers = {
-        "Authorization": f"Bearer {ACRCLOUD_TOKEN}",
-        "Accept": "application/json"
-    }
-    params = {
-        "date": data.date,
-        "with_false_positive": data.with_false_positive
-    }
+async def generar_reporte(request: ProyectoRequest):
+    filas_excel = []
 
     async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers, params=params)
+        for material in request.materiales:
+            for fecha_str in material.fechas_activas:
+                fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d")
+                inicio = fecha_dt.replace(hour=0, minute=0, second=0)
+                fin = fecha_dt.replace(hour=23, minute=59, second=59)
 
-    if response.status_code != 200:
-        return {
-            "status": "error",
-            "code": response.status_code,
-            "detail": response.text
-        }
+                inicio_str = inicio.strftime("%Y-%m-%dT%H:%M:%SZ")
+                fin_str = fin.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    return {
-        "status": "success",
-        "data": response.json()
-    }
+                url = f"{ACRCLOUD_BASE_URL}/{request.proyecto_id}/streams/{material.stream_id}/results"
+                headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
+                params = {
+                    "start_time": inicio_str,
+                    "end_time": fin_str
+                }
+
+                response = await client.get(url, headers=headers, params=params)
+                data = response.json()
+
+                detecciones = []
+                for item in data.get("data", []):
+                    for detected in item.get("metadata", {}).get("custom_files", []):
+                        detecciones.append({
+                            "acrid": detected.get("acrid"),
+                            "hora_detectada": datetime.strptime(item["metadata"]["timestamp_utc"], "%Y-%m-%d %H:%M:%S").time()
+                        })
+
+                for hora_str in material.horarios:
+                    hora_obj = datetime.strptime(hora_str, "%H:%M").time()
+                    hora_min = (datetime.combine(fecha_dt, hora_obj) - timedelta(minutes=request.tolerancia_minutos)).time()
+                    hora_max = (datetime.combine(fecha_dt, hora_obj) + timedelta(minutes=request.tolerancia_minutos)).time()
+
+                    detectado = any(
+                        d["acrid"] == material.acr_id and hora_min <= d["hora_detectada"] <= hora_max
+                        for d in detecciones
+                    )
+
+                    filas_excel.append({
+                        "Fecha": fecha_str,
+                        "Hora programada": hora_str,
+                        "Stream": material.stream_id,
+                        "ACR ID": material.acr_id,
+                        "Detectado": "Sí" if detectado else "No"
+                    })
+
+    df = pd.DataFrame(filas_excel)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Reporte")
+    output.seek(0)
+
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=acrcloud_reporte.xlsx"})
