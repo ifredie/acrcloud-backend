@@ -135,3 +135,13 @@ def generar_excel(data: dict, resumen: dict):
     wb.save(output)
     output.seek(0)
     return output
+
+@app.post("/generar-reporte")
+async def generar_reporte(request: ProyectoRequest):
+    resultados = await fetch_all_results(request.materiales, request.proyecto_id, request.catalogo_streams)
+    # Aquí debes incluir la lógica para comparar con la pauta planificada (que puedes tener ya implementada)
+    # Suponiendo que tienes las variables `data` y `resumen` ya armadas:
+    data = {"detected": resultados, "faltantes": []}  # solo de ejemplo
+    resumen = {}  # también placeholder
+    excel_file = generar_excel(data, resumen)
+    return StreamingResponse(excel_file, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=Reporte-{request.proyecto_id}.xlsx"})
