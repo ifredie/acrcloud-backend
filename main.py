@@ -14,8 +14,8 @@ app = FastAPI()
 
 class Material(BaseModel):
     acr_id: str
-    fechas: list[str]  # formato YYYY-MM-DD
-    horarios: list[str]  # formato HH:MM
+    fechas: list[str]
+    horarios: list[str]
     stream_ids: list[str]
     categoria: str
     conflictos: list[str] = []
@@ -34,10 +34,7 @@ class ProyectoRequest(BaseModel):
 
 async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
     url = f"{ACRCLOUD_BASE_URL}/{project_id}/streams/{stream_id}/results"
-    params = {
-        "date": date,
-        "with_false_positive": 0
-    }
+    params = {"date": date, "with_false_positive": 0}
     headers = {
         "Authorization": f"Bearer {ACRCLOUD_BEARER_TOKEN}",
         "Accept": "application/json"
@@ -46,32 +43,7 @@ async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
         response = await client.get(url, headers=headers, params=params)
         if response.status_code == 200:
             return response.json()
-        else:
-            return {"error": response.text, "codigo": response.status_code, "detalle": f"Error en stream {stream_id} con fecha {date}"}
-
-def generar_resumen(detectados, faltantes):
-    conteo = defaultdict(lambda: defaultdict(lambda: {"Detectados": 0, "Faltantes": 0}))
-
-    for r in detectados:
-        conteo[r["fecha"]][r["stream"]]["Detectados"] += 1
-
-    for r in faltantes:
-        conteo[r["fecha"]][r["stream"]]["Faltantes"] += 1
-
-    resumen = []
-    total_detectados = 0
-    total_faltantes = 0
-
-    for fecha in sorted(conteo.keys()):
-        for stream in sorted(conteo[fecha].keys()):
-            detect = conteo[fecha][stream]["Detectados"]
-            falt = conteo[fecha][stream]["Faltantes"]
-            resumen.append([fecha, stream, detect, falt])
-            total_detectados += detect
-            total_faltantes += falt
-
-    resumen.append(["", "TOTAL GENERAL", total_detectados, total_faltantes])
-    return resumen
+        return {"error": response.text, "codigo": response.status_code, "detalle": f"Error en stream {stream_id} con fecha {date}"}
 
 def generar_excel(data: dict):
     wb = openpyxl.Workbook()
@@ -79,34 +51,42 @@ def generar_excel(data: dict):
     ws.title = "Resultados"
     ws.append(["Fecha", "Hora Detectada", "Hora Pautada", "ACR_ID", "Título", "Stream", "Estado"])
 
-    for item in data.get("detected", []):
+    for item in data.get("detectados", []):
         ws.append([
-            item["fecha"],
-            item["hora"],
-            item["hora_pautada"],
-            item["acr_id"],
-            item["titulo"],
-            item["stream"],
-            item["estado"]
+            item["fecha"], item["hora"], item["hora_pautada"],
+            item["acr_id"], item["titulo"], item["stream"], "DETECTADO"
         ])
 
     for item in data.get("faltantes", []):
         ws.append([
-            item["fecha"],
-            "",
-            item["hora_pautada"],
-            item["acr_id"],
-            "FALTANTE",
-            item["stream"],
-            "FALTANTE"
+            item["fecha"], "", item["hora_pautada"],
+            item["acr_id"], "FALTANTE", item["stream"], "FALTANTE"
         ])
 
-    # Nueva hoja de resumen
-    resumen_data = generar_resumen(data.get("detected", []), data.get("faltantes", []))
-    ws_resumen = wb.create_sheet("Resumen")
-    ws_resumen.append(["Fecha", "Stream", "Detectados", "Faltantes"])
-    for fila in resumen_data:
-        ws_resumen.append(fila)
+    for item in data.get("fuera_horario", []):
+        ws.append([
+            item["fecha"], item["hora"], "", item["acr_id"],
+            item["titulo"], item["stream"], "FUERA DE HORARIO"
+        ])
+
+    # Hoja resumen
+    resumen = wb.create_sheet("Resumen")
+    resumen.append(["Fecha", "Stream", "Detectados", "Faltantes", "Fuera de horario", "Total"])
+    resumen_data = defaultdict(lambda: {"detectados": 0, "faltantes": 0, "fuera_horario": 0})
+
+    for item in data.get("detectados", []):
+        key = (item["fecha"], item["stream"])
+        resumen_data[key]["detectados"] += 1
+    for item in data.get("faltantes", []):
+        key = (item["fecha"], item["stream"])
+        resumen_data[key]["faltantes"] += 1
+    for item in data.get("fuera_horario", []):
+        key = (item["fecha"], item["stream"])
+        resumen_data[key]["fuera_horario"] += 1
+
+    for (fecha, stream), valores in resumen_data.items():
+        total = sum(valores.values())
+        resumen.append([fecha, stream, valores["detectados"], valores["faltantes"], valores["fuera_horario"], total])
 
     output = io.BytesIO()
     wb.save(output)
@@ -115,73 +95,73 @@ def generar_excel(data: dict):
 
 @app.post("/generar-reporte")
 async def generar_reporte(payload: ProyectoRequest):
-    resultados = []
+    detectados = []
+    faltantes = []
+    fuera_horario = []
+
+    todas_detectadas_set = set()  # Para evitar duplicados
+    materiales_by_acr = {mat.acr_id: mat for mat in payload.materiales}
 
     for material in payload.materiales:
         for stream_id in material.stream_ids:
             for fecha in material.fechas:
                 fecha_formateada = fecha.replace("-", "")
-                resultado = await get_results_from_acrcloud(
-                    payload.proyecto_id,
-                    stream_id,
-                    fecha_formateada
-                )
+                resultado = await get_results_from_acrcloud(payload.proyecto_id, stream_id, fecha_formateada)
                 if "error" in resultado:
                     return JSONResponse(content=resultado, status_code=500)
 
+                matches_por_hora = []
+
                 for deteccion in resultado.get("data", []):
-                    for item in deteccion.get("metadata", {}).get("custom_files", []):
-                        if item.get("acrid") == material.acr_id:
-                            timestamp_utc = deteccion.get("metadata", {}).get("timestamp_utc", "")
-                            try:
-                                dt_utc = datetime.strptime(timestamp_utc, "%Y-%m-%d %H:%M:%S")
-                                dt_local = dt_utc - timedelta(hours=6)
-                                hora_local = dt_local.strftime("%H:%M")
-                                fecha_local = dt_local.strftime("%Y-%m-%d")
-                            except:
-                                hora_local = ""
-                                fecha_local = fecha
+                    metadata = deteccion.get("metadata", {})
+                    for item in metadata.get("custom_files", []):
+                        if item.get("acrid") != material.acr_id:
+                            continue
+                        timestamp_utc = metadata.get("timestamp_utc", "")
+                        if not timestamp_utc:
+                            continue
+                        dt_utc = datetime.strptime(timestamp_utc, "%Y-%m-%d %H:%M:%S")
+                        dt_local = dt_utc - timedelta(hours=6)
+                        hora_local = dt_local.strftime("%H:%M")
+                        fecha_local = dt_local.strftime("%Y-%m-%d")
 
-                            resultados.append({
-                                "fecha": fecha_local,
-                                "hora": hora_local,
-                                "acr_id": material.acr_id,
-                                "titulo": item.get("title", ""),
-                                "stream": stream_id
-                            })
+                        # Intentar emparejar con alguno de los horarios
+                        emparejado = False
+                        for hora_pautada in material.horarios:
+                            pauta_dt = datetime.strptime(f"{fecha} {hora_pautada}", "%Y-%m-%d %H:%M")
+                            if abs((dt_local - pauta_dt).total_seconds()) <= payload.tolerancia_minutos * 60:
+                                if (material.acr_id, stream_id, fecha, hora_pautada) not in todas_detectadas_set:
+                                    detectados.append({
+                                        "fecha": fecha,
+                                        "hora": hora_local,
+                                        "hora_pautada": hora_pautada,
+                                        "acr_id": material.acr_id,
+                                        "titulo": item.get("title", ""),
+                                        "stream": stream_id
+                                    })
+                                    todas_detectadas_set.add((material.acr_id, stream_id, fecha, hora_pautada))
+                                    emparejado = True
+                                    break
 
-    faltantes = []
-    resultados_finales = []
+                        # Si no se emparejó con ninguna pauta
+                        if not emparejado:
+                            key_unique = (material.acr_id, stream_id, fecha_local, hora_local)
+                            if key_unique not in todas_detectadas_set:
+                                fuera_horario.append({
+                                    "fecha": fecha_local,
+                                    "hora": hora_local,
+                                    "acr_id": material.acr_id,
+                                    "titulo": item.get("title", ""),
+                                    "stream": stream_id
+                                })
+                                todas_detectadas_set.add(key_unique)
 
+    # Detectar faltantes
     for material in payload.materiales:
         for stream_id in material.stream_ids:
             for fecha in material.fechas:
                 for hora in material.horarios:
-                    hora_objetivo_dt = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
-                    detectado = None
-
-                    for r in resultados:
-                        if r["acr_id"] == material.acr_id and r["stream"] == stream_id:
-                            hora_detectada_dt = datetime.strptime(f"{r['fecha']} {r['hora']}", "%Y-%m-%d %H:%M")
-                            diferencia = abs((hora_detectada_dt - hora_objetivo_dt).total_seconds())
-
-                            if diferencia <= payload.tolerancia_minutos * 60:
-                                detectado = {
-                                    **r,
-                                    "hora_pautada": hora,
-                                    "estado": "DETECTADO"
-                                }
-                                break
-                            elif diferencia <= 3600:  # tolerancia extendida 1 hora
-                                detectado = {
-                                    **r,
-                                    "hora_pautada": hora,
-                                    "estado": "FUERA DE HORARIO"
-                                }
-
-                    if detectado:
-                        resultados_finales.append(detectado)
-                    else:
+                    if (material.acr_id, stream_id, fecha, hora) not in todas_detectadas_set:
                         faltantes.append({
                             "fecha": fecha,
                             "hora_pautada": hora,
@@ -189,12 +169,12 @@ async def generar_reporte(payload: ProyectoRequest):
                             "stream": stream_id
                         })
 
-    excel = generar_excel({"detected": resultados_finales, "faltantes": faltantes})
+    excel = generar_excel({
+        "detectados": detectados,
+        "faltantes": faltantes,
+        "fuera_horario": fuera_horario
+    })
+
     fecha_actual = datetime.now().strftime("%Y%m%d%H%M%S")
     filename = f"reporte_{fecha_actual}.xlsx"
-
-    return StreamingResponse(
-        excel,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+    return StreamingResponse(excel, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename={filename}"})
