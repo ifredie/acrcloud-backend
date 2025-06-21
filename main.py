@@ -80,13 +80,12 @@ async def fetch_all_results(materiales, proyecto_id, catalogo_streams):
 
             for item in deteccion.get("metadata", {}).get("custom_files", []):
                 if item.get("acrid") == material.acr_id:
-                    nombre_stream = deteccion.get("stream", {}).get("name", stream_id)
                     resultados.append({
                         "fecha": fecha_local,
                         "hora": hora_local,
                         "acr_id": material.acr_id,
                         "titulo": item.get("title", ""),
-                        "stream": nombre_stream
+                        "stream": obtener_nombre_stream(stream_id, catalogo_streams)
                     })
     return resultados
 
