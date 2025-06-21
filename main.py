@@ -59,7 +59,7 @@ async def fetch_all_results(materiales, proyecto_id, catalogo_streams):
                     tasks.append((material, stream_id, fecha_formateada))
 
     async def fetch(material, stream_id, fecha_formateada):
-        resultado = await get_results_from_acrcloud(material.proyecto_id, stream_id, fecha_formateada)
+        resultado = await get_results_from_acrcloud(proyecto_id, stream_id, fecha_formateada)
         return (material, stream_id, resultado)
 
     results_raw = await gather(*(fetch(m, s, f) for m, s, f in tasks))
@@ -84,7 +84,7 @@ async def fetch_all_results(materiales, proyecto_id, catalogo_streams):
                     duracion_segundos = item.get("duration_ms", 60000) // 1000
                     record_before = 3
                     record_after = 3
-                    recording_url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{material.proyecto_id}/streams/{stream_id}/recordings?timestamp_utc={dt_utc.strftime('%Y%m%d%H%M%S')}&played_duration={duracion_segundos}&record_before={record_before}&record_after={record_after}&source=report"
+                    recording_url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{proyecto_id}/streams/{stream_id}/recordings?timestamp_utc={dt_utc.strftime('%Y%m%d%H%M%S')}&played_duration={duracion_segundos}&record_before={record_before}&record_after={record_after}&source=report"
 
                     resultados.append({
                         "fecha": fecha_local,
@@ -92,7 +92,10 @@ async def fetch_all_results(materiales, proyecto_id, catalogo_streams):
                         "acr_id": material.acr_id,
                         "titulo": item.get("title", ""),
                         "stream": nombre_stream,
-                        "grabacion": recording_url
+                        "grabacion": recording_url,
+                        "hora_pautada": "",
+                        "estado": "",
+                        "desfase": ""
                     })
 
     return resultados
@@ -139,9 +142,7 @@ def generar_excel(data: dict, resumen: dict):
 @app.post("/generar-reporte")
 async def generar_reporte(request: ProyectoRequest):
     resultados = await fetch_all_results(request.materiales, request.proyecto_id, request.catalogo_streams)
-    # Aquí debes incluir la lógica para comparar con la pauta planificada (que puedes tener ya implementada)
-    # Suponiendo que tienes las variables `data` y `resumen` ya armadas:
-    data = {"detected": resultados, "faltantes": []}  # solo de ejemplo
-    resumen = {}  # también placeholder
+    data = {"detected": resultados, "faltantes": []}  # actualiza con lógica real
+    resumen = {}  # también actualiza con lógica real
     excel_file = generar_excel(data, resumen)
     return StreamingResponse(excel_file, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=Reporte-{request.proyecto_id}.xlsx"})
