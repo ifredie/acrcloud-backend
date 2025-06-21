@@ -35,7 +35,7 @@ class ProyectoRequest(BaseModel):
     catalogo_streams: dict
 
 def obtener_nombre_stream(stream_id: str, catalogo_streams: dict) -> str:
-    return catalogo_streams.get(stream_id, {}).get("nombre", stream_id)
+    return catalogo_streams.get(stream_id, stream_id)
 
 async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
     url = f"{ACRCLOUD_BASE_URL}/{project_id}/streams/{stream_id}/results"
@@ -142,7 +142,49 @@ def generar_excel(data: dict, resumen: dict):
 @app.post("/generar-reporte")
 async def generar_reporte(request: ProyectoRequest):
     resultados = await fetch_all_results(request.materiales, request.proyecto_id, request.catalogo_streams)
-    data = {"detected": resultados, "faltantes": []}  # actualiza con lógica real
-    resumen = {}  # también actualiza con lógica real
+    data_detected = []
+    data_faltantes = []
+    resumen = defaultdict(lambda: {"detectados": 0, "faltantes": 0, "fuera_horario": 0})
+
+    for material in request.materiales:
+        horarios_dt = [datetime.strptime(h, "%H:%M") for h in material.horarios]
+        for fecha in material.fechas:
+            for stream_id in material.stream_ids:
+                nombre_stream = obtener_nombre_stream(stream_id, request.catalogo_streams)
+                detectados_fecha_stream = [r for r in resultados if r["fecha"] == fecha and r["acr_id"] == material.acr_id and r["stream"] == nombre_stream]
+                horarios_detectados = []
+
+                for registro in detectados_fecha_stream:
+                    hora_detectada = datetime.strptime(registro["hora"], "%H:%M:%S")
+                    mejor_match = None
+                    for hora_pauta in horarios_dt:
+                        desfase = abs((hora_detectada - hora_pauta).total_seconds()) / 60
+                        if desfase <= request.tolerancia_minutos:
+                            mejor_match = hora_pauta
+                            break
+                    if mejor_match:
+                        registro["hora_pautada"] = mejor_match.strftime("%H:%M")
+                        registro["estado"] = "PAUTADO"
+                        registro["desfase"] = round(desfase, 2)
+                        data_detected.append(registro)
+                        horarios_detectados.append(mejor_match.strftime("%H:%M"))
+                        resumen[(fecha, nombre_stream)]["detectados"] += 1
+                    else:
+                        registro["estado"] = "FUERA DE HORARIO"
+                        registro["desfase"] = ""
+                        data_detected.append(registro)
+                        resumen[(fecha, nombre_stream)]["fuera_horario"] += 1
+
+                for hora_pauta in material.horarios:
+                    if hora_pauta not in horarios_detectados:
+                        data_faltantes.append({
+                            "fecha": fecha,
+                            "hora_pautada": hora_pauta,
+                            "acr_id": material.acr_id,
+                            "stream": nombre_stream
+                        })
+                        resumen[(fecha, nombre_stream)]["faltantes"] += 1
+
+    data = {"detected": data_detected, "faltantes": data_faltantes}
     excel_file = generar_excel(data, resumen)
     return StreamingResponse(excel_file, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=Reporte-{request.proyecto_id}.xlsx"})
