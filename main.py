@@ -59,7 +59,7 @@ async def fetch_all_results(materiales, proyecto_id, catalogo_streams):
                     tasks.append((material, stream_id, fecha_formateada))
 
     async def fetch(material, stream_id, fecha_formateada):
-        resultado = await get_results_from_acrcloud(proyecto_id, stream_id, fecha_formateada)
+        resultado = await get_results_from_acrcloud(material.proyecto_id, stream_id, fecha_formateada)
         return (material, stream_id, resultado)
 
     results_raw = await gather(*(fetch(m, s, f) for m, s, f in tasks))
@@ -80,13 +80,13 @@ async def fetch_all_results(materiales, proyecto_id, catalogo_streams):
 
             for item in deteccion.get("metadata", {}).get("custom_files", []):
                 if item.get("acrid") == material.acr_id:
-                    nombre_stream = deteccion.get("stream", {}).get("name", stream_id)
+                    nombre_stream = obtener_nombre_stream(stream_id, catalogo_streams)
                     duracion_segundos = item.get("duration_ms", 60000) // 1000
                     record_before = 3
                     record_after = 3
-    recording_url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{proyecto_id}/streams/{stream_id}/recordings?timestamp_utc={dt_utc.strftime('%Y%m%d%H%M%S')}&played_duration={duracion_segundos}&record_before={record_before}&record_after={record_after}&source=report"
+                    recording_url = f"https://api-v2.acrcloud.com/api/bm-cs-projects/{material.proyecto_id}/streams/{stream_id}/recordings?timestamp_utc={dt_utc.strftime('%Y%m%d%H%M%S')}&played_duration={duracion_segundos}&record_before={record_before}&record_after={record_after}&source=report"
 
-    resultados.append({
+                    resultados.append({
                         "fecha": fecha_local,
                         "hora": hora_local,
                         "acr_id": material.acr_id,
@@ -94,6 +94,7 @@ async def fetch_all_results(materiales, proyecto_id, catalogo_streams):
                         "stream": nombre_stream,
                         "grabacion": recording_url
                     })
+
     return resultados
 
 def generar_excel(data: dict, resumen: dict):
@@ -104,14 +105,14 @@ def generar_excel(data: dict, resumen: dict):
 
     for item in data.get("detected", []):
         ws.append([
-        item["fecha"], item["hora"], item["hora_pautada"], item["acr_id"],
-        item["titulo"], item["stream"], item["estado"], item["desfase"], item.get("grabacion", "")
-    ])
+            item["fecha"], item["hora"], item["hora_pautada"], item["acr_id"],
+            item["titulo"], item["stream"], item["estado"], item["desfase"], item.get("grabacion", "")
+        ])
 
     for item in data.get("faltantes", []):
         ws.append([
             item["fecha"], "", item["hora_pautada"], item["acr_id"],
-            "FALTANTE", item["stream"], "FALTANTE", ""
+            "FALTANTE", item["stream"], "FALTANTE", "", ""
         ])
 
     resumen_ws = wb.create_sheet(title="Resumen Diario")
@@ -134,68 +135,3 @@ def generar_excel(data: dict, resumen: dict):
     wb.save(output)
     output.seek(0)
     return output
-
-@app.post("/generar-reporte")
-async def generar_reporte(payload: ProyectoRequest):
-    resultados = await fetch_all_results(payload.materiales, payload.proyecto_id, payload.catalogo_streams)
-
-    faltantes = []
-    resultados_finales = []
-    fuera_horario = []
-    resumen_diario = defaultdict(lambda: {"detectados": 0, "faltantes": 0, "fuera_horario": 0})
-
-    for material in payload.materiales:
-        for stream_id in material.stream_ids:
-            nombre_stream = obtener_nombre_stream(stream_id, payload.catalogo_streams)
-            for fecha in material.fechas:
-                for hora in material.horarios:
-                    hora_objetivo_dt = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
-                    detectado = None
-
-                    for r in resultados:
-                        if r["acr_id"] == material.acr_id and r["stream"] == nombre_stream:
-                            try:
-                                hora_detectada_dt = datetime.strptime(f"{r['fecha']} {r['hora']}", "%Y-%m-%d %H:%M:%S")
-                            except:
-                                continue
-                            desfase = int((hora_detectada_dt - hora_objetivo_dt).total_seconds() / 60)
-                            if abs(desfase) <= payload.tolerancia_minutos:
-                                detectado = {
-                                    **r,
-                                    "hora_pautada": hora,
-                                    "estado": "DETECTADO",
-                                    "desfase": desfase
-                                }
-                                break
-
-                    if detectado:
-                        resultados_finales.append(detectado)
-                        resumen_diario[(fecha, nombre_stream)]["detectados"] += 1
-                    else:
-                        faltantes.append({
-                            "fecha": fecha,
-                            "hora_pautada": hora,
-                            "acr_id": material.acr_id,
-                            "stream": nombre_stream
-                        })
-                        resumen_diario[(fecha, nombre_stream)]["faltantes"] += 1
-
-            for r in resultados:
-                if r["acr_id"] == material.acr_id and r["stream"] == nombre_stream:
-                    ya_detectado = any(
-                        d["fecha"] == r["fecha"] and d["hora"] == r["hora"] and d["stream"] == r["stream"] for d in resultados_finales
-                    )
-                    if not ya_detectado:
-                        fuera_horario.append({
-                            **r,
-                            "hora_pautada": "",
-                            "estado": "FUERA DE HORARIO",
-                            "desfase": ""
-                        })
-                        resumen_diario[(r["fecha"], r["stream"])]["fuera_horario"] += 1
-
-    excel = generar_excel({"detected": resultados_finales + fuera_horario, "faltantes": faltantes}, resumen_diario)
-    fecha_actual = datetime.now().strftime("%Y%m%d%H%M%S")
-    filename = f"reporte_{fecha_actual}.xlsx"
-
-    return StreamingResponse(excel, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename={filename}"})
