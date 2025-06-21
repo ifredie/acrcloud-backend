@@ -69,7 +69,7 @@ def generar_excel(data: dict, resumen: dict):
         detectados = conteo.get("detectados", 0)
         faltantes = conteo.get("faltantes", 0)
         fuera_horario = conteo.get("fuera_horario", 0)
-        total = detectados - faltantes + fuera_horario
+        total = detectados + fuera_horario
         resumen_ws.append([fecha, stream, detectados, faltantes, fuera_horario, total])
         total_detectados += detectados
         total_faltantes += faltantes
