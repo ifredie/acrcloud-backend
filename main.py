@@ -1,20 +1,20 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 import httpx
 import openpyxl
 import os
 
 ACRCLOUD_BASE_URL = "https://api-v2.acrcloud.com/api/bm-cs-projects"
-ACRCLOUD_BEARER_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiI3IiwianRpIjoiNjYwODQwOTYxMzRiNWM5NjljODY2NDMwMGNiZDFjNzllM2NmZjhiODBkN2Q0ZmY4MTMyYTFmN2QzNGI5NTBjMmFmNTk3ODNhMGJlYjRmMzciLCJpYXQiOjE3MzIyMjA3NDcuNzczMjI4LCJuYmYiOjE3MzIyMjA3NDcuNzczMjMxLCJleHAiOjIwNDc3NTM1NDcuNzI2MDMyLCJzdWIiOiIxNTMzMjUiLCJzY29wZXMiOlsiKiIsIndyaXRlLWFsbCIsInJlYWQtYWxsIiwiYnVja2V0cyIsIndyaXRlLWJ1Y2tldHMiLCJyZWFkLWJ1Y2tldHMiLCJhdWRpb3MiLCJ3cml0ZS1hdWRpb3MiLCJyZWFkLWF1ZGlvcyIsImNoYW5uZWxzIiwid3JpdGUtY2hhbm5lbHMiLCJyZWFkLWNoYW5uZWxzIiwiYmFzZS1wcm9qZWN0cyIsIndyaXRlLWJhc2UtcHJvamVjdHMiLCJyZWFkLWJhc2UtcHJvamVjdHMiLCJ1Y2YiLCJ3cml0ZS11Y2YiLCJyZWFkLXVjZiIsImRlbGV0ZS11Y2YiLCJibS1wcm9qZWN0cyIsImJtLWNzLXByb2plY3RzIiwid3JpdGUtYm0tY3MtcHJvamVjdHMiLCJyZWFkLWJtLWNzLXByb2plY3RzIiwiYm0tYmQtcHJvamVjdHMiLCJ3cml0ZS1ibS1iZC1wcm9qZWN0cyIsInJlYWQtYm0tYmQtcHJvamVjdHMiLCJmaWxlc2Nhbm5pbmciLCJ3cml0ZS1maWxlc2Nhbm5pbmciLCJyZWFkLWZpbGVzY2FubmluZyIsIm1ldGFkYXRhIiwicmVhZC1tZXRhZGF0YSJdfQ.b0XSJI7YCgd-AWGCLMdPJWo84470QNqovjtp34TKqrjlrnURCEqoI5jE3pBqqKqkVzh46HQjqtyIj7ge7JbNrEichHClKFIGW-JCrxYk-Oo8iDoWq8u-kCARPUrhAUMB_krK2PkkONN21gN4ZguFXgqBEZg2DwincaZhtDGKlM4MbQ9ctMgGapaHQXGa2SyoBQI9fZdNpQrTIplYznKZ2k8g86_8M9Be-tSpPBFEq0nwCKWF_Ya8USU_lxQUiOmAr4Wo5A0mi2FFeUIY7h4AhgP_LkgOwUMVt2JP95edVLlzUuRRVGkW1BG7536V4K51NOh4zr6tK28dixEQCuMj3nPHNG6w0VsT80yVU8mJTcOKxcjCexJNfwoyyAHRJblx6xsG2IZYECCJM0NFRv9GVMKLp2IUKTYM741HnpIGNowav6sNXsRgM8aVPXghf4jbJwfbuzC6XWD3hnQ0D5ybD-V9wAvkEJ0lIIDdkfrMZLW-bI1ju0oRV2CzFl-NpVRqjRp8tBM--6oq51LPx_qm_6CzZsUC6qQeBc1uFL39g_UbbmR4nT4y9w_ENSq1VDz9t8jDdas2arY8T1YzDQW1unbA2UfsyVc57YD4xjcWSLGrFbceS2SvQkGyqEHtB_riLZhl-x9rt8BCw73aFEu7WfOTOLgPs_y-rwgsVeQcKLc"  # ← Coloca tu token aquí
+ACRCLOUD_BEARER_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiI3IiwianRpIjoiNjYwODQwOTYxMzRiNWM5NjljODY2NDMwMGNiZDFjNzllM2NmZjhiODBkN2Q0ZmY4MTMyYTFmN2QzNGI5NTBjMmFmNTk3ODNhMGJlYjRmMzciLCJpYXQiOjE3MzIyMjA3NDcuNzczMjI4LCJuYmYiOjE3MzIyMjA3NDcuNzczMjMxLCJleHAiOjIwNDc3NTM1NDcuNzI2MDMyLCJzdWIiOiIxNTMzMjUiLCJzY29wZXMiOlsiKiIsIndyaXRlLWFsbCIsInJlYWQtYWxsIiwiYnVja2V0cyIsIndyaXRlLWJ1Y2tldHMiLCJyZWFkLWJ1Y2tldHMiLCJhdWRpb3MiLCJ3cml0ZS1hdWRpb3MiLCJyZWFkLWF1ZGlvcyIsImNoYW5uZWxzIiwid3JpdGUtY2hhbm5lbHMiLCJyZWFkLWNoYW5uZWxzIiwiYmFzZS1wcm9qZWN0cyIsIndyaXRlLWJhc2UtcHJvamVjdHMiLCJyZWFkLWJhc2UtcHJvamVjdHMiLCJ1Y2YiLCJ3cml0ZS11Y2YiLCJyZWFkLXVjZiIsImRlbGV0ZS11Y2YiLCJibS1wcm9qZWN0cyIsImJtLWNzLXByb2plY3RzIiwid3JpdGUtYm0tY3MtcHJvamVjdHMiLCJyZWFkLWJtLWNzLXByb2plY3RzIiwiYm0tYmQtcHJvamVjdHMiLCJ3cml0ZS1ibS1iZC1wcm9qZWN0cyIsInJlYWQtYm0tYmQtcHJvamVjdHMiLCJmaWxlc2Nhbm5pbmciLCJ3cml0ZS1maWxlc2Nhbm5pbmciLCJyZWFkLWZpbGVzY2FubmluZyIsIm1ldGFkYXRhIiwicmVhZC1tZXRhZGF0YSJdfQ.b0XSJI7YCgd-AWGCLMdPJWo84470QNqovjtp34TKqrjlrnURCEqoI5jE3pBqqKqkVzh46HQjqtyIj7ge7JbNrEichHClKFIGW-JCrxYk-Oo8iDoWq8u-kCARPUrhAUMB_krK2PkkONN21gN4ZguFXgqBEZg2DwincaZhtDGKlM4MbQ9ctMgGapaHQXGa2SyoBQI9fZdNpQrTIplYznKZ2k8g86_8M9Be-tSpPBFEq0nwCKWF_Ya8USU_lxQUiOmAr4Wo5A0mi2FFeUIY7h4AhgP_LkgOwUMVt2JP95edVLlzUuRRVGkW1BG7536V4K51NOh4zr6tK28dixEQCuMj3nPHNG6w0VsT80yVU8mJTcOKxcjCexJNfwoyyAHRJblx6xsG2IZYECCJM0NFRv9GVMKLp2IUKTYM741HnpIGNowav6sNXsRgM8aVPXghf4jbJwfbuzC6XWD3hnQ0D5ybD-V9wAvkEJ0lIIDdkfrMZLW-bI1ju0oRV2CzFl-NpVRqjRp8tBM--6oq51LPx_qm_6CzZsUC6qQeBc1uFL39g_UbbmR4nT4y9w_ENSq1VDz9t8jDdas2arY8T1YzDQW1unbA2UfsyVc57YD4xjcWSLGrFbceS2SvQkGyqEHtB_riLZhl-x9rt8BCw73aFEu7WfOTOLgPs_y-rwgsVeQcKLc"
 
 app = FastAPI()
 
 class Material(BaseModel):
     acr_id: str
-    fechas: list[str]  # formato YYYY-MM-DD
+    fechas: list[str]  # formato YYYYMMDD
     horarios: list[str]  # formato HH:MM
     stream_ids: list[str]
     categoria: str
@@ -33,11 +33,9 @@ class ProyectoRequest(BaseModel):
     catalogo_streams: dict
 
 async def get_results_from_acrcloud(project_id: str, stream_id: str, date: str):
-    # Convertir de YYYY-MM-DD a YYYYMMDD
-    fecha_api = date.replace("-", "")
     url = f"{ACRCLOUD_BASE_URL}/{project_id}/streams/{stream_id}/results"
     params = {
-        "date": fecha_api,
+        "date": date,
         "with_false_positive": 0
     }
     headers = {
@@ -83,7 +81,6 @@ def generar_excel(data: dict):
 @app.post("/generar-reporte")
 async def generar_reporte(payload: ProyectoRequest):
     resultados = []
-
     for material in payload.materiales:
         for stream_id in material.stream_ids:
             for fecha in material.fechas:
@@ -96,46 +93,49 @@ async def generar_reporte(payload: ProyectoRequest):
                     return JSONResponse(content=resultado, status_code=500)
 
                 for deteccion in resultado.get("data", []):
+                    utc_timestamp = deteccion.get("metadata", {}).get("timestamp_utc", "")
+                    if not utc_timestamp:
+                        continue
+                    try:
+                        dt_utc = datetime.strptime(utc_timestamp, "%Y-%m-%dT%H:%M:%S")
+                    except ValueError:
+                        continue
+
+                    dt_local = dt_utc - timedelta(hours=6)
+                    hora_local = dt_local.strftime("%H:%M")
+                    fecha_local = dt_local.strftime("%Y-%m-%d")
+
                     for item in deteccion.get("metadata", {}).get("custom_files", []):
                         if item.get("acrid") == material.acr_id:
-                            timestamp = deteccion.get("metadata", {}).get("timestamp_utc", "")
-                            if timestamp:
-                                hora = timestamp[11:16]
-                                resultados.append({
-                                    "fecha": fecha,
-                                    "hora": hora,
-                                    "acr_id": material.acr_id,
-                                    "titulo": item.get("title", ""),
-                                    "stream": stream_id
-                                })
+                            resultados.append({
+                                "fecha": fecha_local,
+                                "hora": hora_local,
+                                "acr_id": material.acr_id,
+                                "titulo": item.get("title", ""),
+                                "stream": stream_id
+                            })
 
-    # Comparación considerando tolerancia
+    # Generar lista de faltantes
     faltantes = []
     for material in payload.materiales:
         for fecha in material.fechas:
-            for hora_objetivo in material.horarios:
-                hora_objetivo_dt = datetime.strptime(hora_objetivo, "%H:%M")
-                rango_inicio = hora_objetivo_dt.minute - payload.tolerancia_minutos
-                rango_fin = hora_objetivo_dt.minute + payload.tolerancia_minutos
+            for hora in material.horarios:
                 for stream_id in material.stream_ids:
+                    objetivo_dt = datetime.strptime(f"{fecha} {hora}", "%Y%m%d %H:%M")
                     encontrado = False
                     for r in resultados:
+                        r_dt = datetime.strptime(f"{r['fecha']} {r['hora']}", "%Y-%m-%d %H:%M")
                         if (
-                            r["fecha"] == fecha and
                             r["acr_id"] == material.acr_id and
-                            r["stream"] == stream_id
+                            r["stream"] == stream_id and
+                            abs((r_dt - objetivo_dt).total_seconds()) <= payload.tolerancia_minutos * 60
                         ):
-                            hora_detectada_dt = datetime.strptime(r["hora"], "%H:%M")
-                            if (
-                                hora_detectada_dt.hour == hora_objetivo_dt.hour and
-                                rango_inicio <= hora_detectada_dt.minute <= rango_fin
-                            ):
-                                encontrado = True
-                                break
+                            encontrado = True
+                            break
                     if not encontrado:
                         faltantes.append({
-                            "fecha": fecha,
-                            "hora": hora_objetivo,
+                            "fecha": objetivo_dt.strftime("%Y-%m-%d"),
+                            "hora": objetivo_dt.strftime("%H:%M"),
                             "acr_id": material.acr_id,
                             "stream": stream_id
                         })
