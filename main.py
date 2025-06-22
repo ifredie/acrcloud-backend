@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 import io
@@ -97,14 +97,13 @@ def generar_excel(data: dict, resumen: dict):
 
     for item in data.get("detected", []):
         ws.append([
-            item["stream"], item["titulo"], item["fecha"], item["hora_pautada"],
+            item["stream"], item.get("titulo", ""), item["fecha"], item["hora_pautada"],
             item["hora"], item["desfase"], item["estado"], item["acr_id"]
         ])
 
     for item in data.get("faltantes", []):
         ws.append([
-            item["stream"], "FALTANTE", item["fecha"], item["hora_pautada"],
-            "", "", "FALTANTE", item["acr_id"]
+            item["stream"], "", item["fecha"], item["hora_pautada"], "", "", "FALTANTE", item["acr_id"]
         ])
 
     resumen_ws = wb.create_sheet(title="Resumen Diario")
@@ -163,7 +162,7 @@ async def generar_reporte(payload: ProyectoRequest):
 
                     if detectado:
                         resultados_finales.append(detectado)
-                        resumen_diario[(fecha, nombre_stream, detectado["titulo"])]["detectados"] += 1
+                        resumen_diario[(fecha, nombre_stream, detectado.get("titulo", ""))]["detectados"] += 1
                     else:
                         faltantes.append({
                             "fecha": fecha,
@@ -185,7 +184,7 @@ async def generar_reporte(payload: ProyectoRequest):
                             "estado": "FUERA DE HORARIO",
                             "desfase": ""
                         })
-                        resumen_diario[(r["fecha"], r["stream"], r["titulo"])]["fuera_horario"] += 1
+                        resumen_diario[(r["fecha"], r["stream"], r.get("titulo", ""))]["fuera_horario"] += 1
 
     excel = generar_excel({"detected": resultados_finales + fuera_horario, "faltantes": faltantes}, resumen_diario)
     fecha_actual = datetime.now().strftime("%Y%m%d%H%M%S")
