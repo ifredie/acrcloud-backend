@@ -97,30 +97,29 @@ def generar_excel(data: dict, resumen: dict):
 
     for item in data.get("detected", []):
         ws.append([
-            item["stream"], item.get("titulo", ""), item["fecha"], item["hora_pautada"],
-            item["hora"], item["desfase"], item["estado"], item["acr_id"]
+            item["stream"], item["titulo"], item["fecha"], item["hora_pautada"], item["hora"], item["desfase"], item["estado"], item["acr_id"]
         ])
 
     for item in data.get("faltantes", []):
         ws.append([
-            item["stream"], "", item["fecha"], item["hora_pautada"], "", "", "FALTANTE", item["acr_id"]
+            item["stream"], item.get("titulo", ""), item["fecha"], item["hora_pautada"], "", "", "FALTANTE", item["acr_id"]
         ])
 
     resumen_ws = wb.create_sheet(title="Resumen Diario")
     resumen_ws.append(["Stream", "Título", "Fecha", "Detectados", "Fuera de Horario", "Faltantes", "Total"])
-    total_detectados = total_faltantes = total_fuera_horario = 0
 
-    for (fecha, stream, titulo), conteo in resumen.items():
+    total_detectados = total_faltantes = total_fuera_horario = 0
+    for (stream, titulo, fecha), conteo in resumen.items():
         detectados = conteo.get("detectados", 0)
         faltantes = conteo.get("faltantes", 0)
         fuera_horario = conteo.get("fuera_horario", 0)
-        total = detectados + fuera_horario
+        total = detectados + fuera_horario + faltantes
         resumen_ws.append([stream, titulo, fecha, detectados, fuera_horario, faltantes, total])
         total_detectados += detectados
         total_faltantes += faltantes
         total_fuera_horario += fuera_horario
 
-    resumen_ws.append(["TOTAL", "", "", total_detectados, total_fuera_horario, total_faltantes, total_detectados + total_fuera_horario])
+    resumen_ws.append(["TOTAL", "", "", total_detectados, total_fuera_horario, total_faltantes, total_detectados + total_faltantes + total_fuera_horario])
 
     output = io.BytesIO()
     wb.save(output)
@@ -139,6 +138,11 @@ async def generar_reporte(payload: ProyectoRequest):
     for material in payload.materiales:
         for stream_id in material.stream_ids:
             nombre_stream = obtener_nombre_stream(stream_id, payload.catalogo_streams)
+            titulo = ""
+            for r in resultados:
+                if r["acr_id"] == material.acr_id and r["stream"] == nombre_stream:
+                    titulo = r["titulo"]
+                    break
             for fecha in material.fechas:
                 for hora in material.horarios:
                     hora_objetivo_dt = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
@@ -162,15 +166,16 @@ async def generar_reporte(payload: ProyectoRequest):
 
                     if detectado:
                         resultados_finales.append(detectado)
-                        resumen_diario[(fecha, nombre_stream, detectado.get("titulo", ""))]["detectados"] += 1
+                        resumen_diario[(nombre_stream, titulo, fecha)]["detectados"] += 1
                     else:
                         faltantes.append({
                             "fecha": fecha,
                             "hora_pautada": hora,
                             "acr_id": material.acr_id,
-                            "stream": nombre_stream
+                            "stream": nombre_stream,
+                            "titulo": titulo
                         })
-                        resumen_diario[(fecha, nombre_stream, "")]["faltantes"] += 1
+                        resumen_diario[(nombre_stream, titulo, fecha)]["faltantes"] += 1
 
             for r in resultados:
                 if r["acr_id"] == material.acr_id and r["stream"] == nombre_stream:
@@ -184,7 +189,7 @@ async def generar_reporte(payload: ProyectoRequest):
                             "estado": "FUERA DE HORARIO",
                             "desfase": ""
                         })
-                        resumen_diario[(r["fecha"], r["stream"], r.get("titulo", ""))]["fuera_horario"] += 1
+                        resumen_diario[(r["stream"], r["titulo"], r["fecha"])]["fuera_horario"] += 1
 
     excel = generar_excel({"detected": resultados_finales + fuera_horario, "faltantes": faltantes}, resumen_diario)
     fecha_actual = datetime.now().strftime("%Y%m%d%H%M%S")
